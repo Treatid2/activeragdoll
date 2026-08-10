@@ -6,6 +6,7 @@
 #include <deque>
 #include <optional>
 #include <shared_mutex>
+#include <new>
 
 #include <Physics/Collide/Shape/Convex/ConvexVertices/hkpConvexVerticesShape.h>
 #include <Physics/Collide/Shape/Convex/Capsule/hkpCapsuleShape.h>
@@ -280,7 +281,7 @@ void UpdateCollisionFilterOnAllBones(Actor *actor)
     if (Actor_IsInRagdollState(actor)) return;
 
     bool hasRagdollInterface = false;
-    BSTSmartPointer<BSAnimationGraphManager> animGraphManager{ 0 }; // need to init this to 0 or we crash
+    BSAnimationGraphManagerPtr animGraphManager;
     if (GetAnimationGraphManager(actor, animGraphManager)) {
         BSAnimationGraphManager_HasRagdoll(animGraphManager.ptr, &hasRagdollInterface);
     }
@@ -3078,11 +3079,19 @@ void TryUpdateNPCState(Actor *actor, bool isShoved, bool wasJustRagdolled)
 
 hkaKeyFrameHierarchyUtility::Output g_stressOut[200]; // set in a hook during driveToPose(). Just reserve a bunch of space so it can handle any number of bones.
 
-hkArray<hkVector4> g_scratchHkArray{}; // We can't call the destructor of this ourselves, so this is a global array to be used at will and never deallocated.
+// Construct the scratch array in static storage but intentionally never destroy
+// it: Skyrim/Havok grows it, and DLL shutdown must not free game-owned memory.
+alignas(hkArray<hkVector4>) char g_scratchHkArrayStorage[sizeof(hkArray<hkVector4>)]{};
+
+hkArray<hkVector4> &GetScratchHkArray()
+{
+    static auto *scratch = ::new (g_scratchHkArrayStorage) hkArray<hkVector4>{};
+    return *scratch;
+}
 
 bool IsAddedToWorld(Actor *actor)
 {
-    BSTSmartPointer<BSAnimationGraphManager> animGraphManager{ 0 };
+    BSAnimationGraphManagerPtr animGraphManager;
     if (!GetAnimationGraphManager(actor, animGraphManager)) return false;
 
     BSAnimationGraphManager *manager = animGraphManager.ptr;
@@ -3129,7 +3138,7 @@ bool IsAddableToWorld(Actor *actor)
 
     if (IsTemporaryIgnoredActor(actor)) return false;
 
-    BSTSmartPointer<BSAnimationGraphManager> animGraphManager{ 0 };
+    BSAnimationGraphManagerPtr animGraphManager;
     if (!GetAnimationGraphManager(actor, animGraphManager)) return false;
 
     BSAnimationGraphManager *manager = animGraphManager.ptr;
@@ -3440,7 +3449,7 @@ bool AddRagdollToWorld(Actor *actor)
     if (!Config::options.processRagdolledActors && Actor_IsInRagdollState(actor)) return false;
 
     bool hasRagdollInterface = false;
-    BSTSmartPointer<BSAnimationGraphManager> animGraphManager{ 0 }; // need to init this to 0 or we crash
+    BSAnimationGraphManagerPtr animGraphManager;
     if (GetAnimationGraphManager(actor, animGraphManager)) {
         BSAnimationGraphManager_HasRagdoll(animGraphManager.ptr, &hasRagdollInterface);
     }
@@ -3535,7 +3544,7 @@ bool AddRagdollToWorld(Actor *actor)
 
 void CleanupActiveRagdollTracking(Actor *actor)
 {
-    BSTSmartPointer<BSAnimationGraphManager> animGraphManager{ 0 }; // need to init this to 0 or we crash
+    BSAnimationGraphManagerPtr animGraphManager;
     if (GetAnimationGraphManager(actor, animGraphManager)) {
         BSAnimationGraphManager *manager = animGraphManager.ptr;
         {
@@ -3576,7 +3585,7 @@ bool RemoveRagdollFromWorld(Actor *actor)
     if (!Config::options.processRagdolledActors && isInRagdollState) return false;
 
     bool hasRagdollInterface = false;
-    BSTSmartPointer<BSAnimationGraphManager> animGraphManager{ 0 }; // need to init this to 0 or we crash
+    BSAnimationGraphManagerPtr animGraphManager;
     if (GetAnimationGraphManager(actor, animGraphManager)) {
         BSAnimationGraphManager_HasRagdoll(animGraphManager.ptr, &hasRagdollInterface);
     }
@@ -3607,7 +3616,7 @@ void DisableOrEnableSyncOnUpdate(Actor *actor, bool disableElseEnable)
     if (Actor_IsInRagdollState(actor)) return;
 
     bool hasRagdollInterface = false;
-    BSTSmartPointer<BSAnimationGraphManager> animGraphManager{ 0 }; // need to init this to 0 or we crash
+    BSAnimationGraphManagerPtr animGraphManager;
     if (GetAnimationGraphManager(actor, animGraphManager)) {
         BSAnimationGraphManager_HasRagdoll(animGraphManager.ptr, &hasRagdollInterface);
     }
@@ -3646,7 +3655,7 @@ void RemoveActorFromWorldIfActive(Actor *actor)
 void EnableGravity(Actor *actor)
 {
     bool hasRagdollInterface = false;
-    BSTSmartPointer<BSAnimationGraphManager> animGraphManager{ 0 }; // need to init this to 0 or we crash
+    BSAnimationGraphManagerPtr animGraphManager;
     if (GetAnimationGraphManager(actor, animGraphManager)) {
         BSAnimationGraphManager_HasRagdoll(animGraphManager.ptr, &hasRagdollInterface);
     }
@@ -4452,8 +4461,8 @@ void ProcessHavokHitJobsHook(HavokHitJobs *havokHitJobs)
 
                 if (Config::options.resizePlayerCharController && convexVerticesShape) {
                     // Shrink convex charcontroller shape
-                    g_scratchHkArray.clear();
-                    hkArray<hkVector4> &verts = g_scratchHkArray;
+                    hkArray<hkVector4> &verts = GetScratchHkArray();
+                    verts.clear();
 
                     hkpConvexVerticesShape_getOriginalVertices(convexVerticesShape, verts);
 
@@ -5777,7 +5786,7 @@ struct RemoveNonRagdollRigidBodiesFromWorldTask : TaskDelegate
         NiPointer<TESObjectREFR> refr;
         if (LookupREFRByHandle(handle, refr)) {
             if (Actor *actor = DYNAMIC_CAST(refr, TESObjectREFR, Actor)) {
-                BSTSmartPointer<BSAnimationGraphManager> animGraphManager{ 0 };
+                BSAnimationGraphManagerPtr animGraphManager;
                 if (GetAnimationGraphManager(actor, animGraphManager)) {
                     BSAnimationGraphManager *manager = animGraphManager.ptr;
 

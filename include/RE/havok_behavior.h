@@ -26,6 +26,7 @@
 #include "skse64/GameReferences.h"
 
 #include "RE/havok.h"
+#include "RE/bs_intrusive_ref_ptr.h"
 #include "RE/misc.h"
 #include "havok_ref_ptr.h"
 
@@ -773,6 +774,12 @@ public:
 static_assert(offsetof(BSAnimationGraphManager, graphs) == 0x40);
 static_assert(offsetof(BSAnimationGraphManager, updateLock) == 0x98);
 
+using BSAnimationGraphManagerPtr = BSIntrusiveRefPtr<BSAnimationGraphManager, 0x08>;
+static_assert(sizeof(BSAnimationGraphManagerPtr) == sizeof(void *));
+static_assert(alignof(BSAnimationGraphManagerPtr) == alignof(void *));
+static_assert(!std::is_copy_constructible_v<BSAnimationGraphManagerPtr>);
+static_assert(std::is_nothrow_move_constructible_v<BSAnimationGraphManagerPtr>);
+
 struct hkbPoweredRagdollControlData
 {
     HK_ALIGN16(hkReal m_maxForce) = 50.f; // 00
@@ -988,8 +995,11 @@ inline hkbGeneratorOutput::TrackHeader *GetTrackHeader(hkbGeneratorOutput &gener
     return numTracks > trackId ? &(generatorOutput.m_tracks->m_trackHeaders[trackId]) : nullptr;
 }
 
-typedef bool(*_IAnimationGraphManagerHolder_GetAnimationGraphManagerImpl)(IAnimationGraphManagerHolder *_this, BSTSmartPointer<BSAnimationGraphManager> &a_out);
-inline bool GetAnimationGraphManager(Actor *actor, BSTSmartPointer<BSAnimationGraphManager> &out) {
+typedef bool(*_IAnimationGraphManagerHolder_GetAnimationGraphManagerImpl)(IAnimationGraphManagerHolder *_this, BSAnimationGraphManagerPtr &a_out);
+inline bool GetAnimationGraphManager(Actor *actor, BSAnimationGraphManagerPtr &out) {
+    // Some callers intentionally reuse the same local for a second query.
+    // Release the previous result before Skyrim overwrites it.
+    out.Reset();
     IAnimationGraphManagerHolder *animGraphManagerHolder = &actor->animGraphHolder;
     UInt64 *vtbl = *((UInt64 **)animGraphManagerHolder);
     return ((_IAnimationGraphManagerHolder_GetAnimationGraphManagerImpl)(vtbl[0x02]))(animGraphManagerHolder, out);
