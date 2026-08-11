@@ -7,6 +7,59 @@
 #include "utils.h"
 #include "math_utils.h"
 
+// The header-only Havok SDK package declares these data symbols but does not
+// ship the corresponding Base library. PLANCK only needs the standard math
+// constants compiled into its own module.
+const hkQuadReal hkQuadReal0000 = HK_QUADREAL_CONSTANT(0.f, 0.f, 0.f, 0.f);
+const hkQuadReal hkQuadRealMinusHalf = HK_QUADREAL_CONSTANT(-0.5f, -0.5f, -0.5f, -0.5f);
+
+const hkQuadReal g_vectorConstants[HK_QUADREAL_END] = {
+    HK_QUADREAL_CONSTANT(-1.f, -1.f, -1.f, -1.f),
+    HK_QUADREAL_CONSTANT(0.f, 0.f, 0.f, 0.f),
+    HK_QUADREAL_CONSTANT(1.f, 1.f, 1.f, 1.f),
+    HK_QUADREAL_CONSTANT(2.f, 2.f, 2.f, 2.f),
+    HK_QUADREAL_CONSTANT(3.f, 3.f, 3.f, 3.f),
+    HK_QUADREAL_CONSTANT(4.f, 4.f, 4.f, 4.f),
+    HK_QUADREAL_CONSTANT(5.f, 5.f, 5.f, 5.f),
+    HK_QUADREAL_CONSTANT(6.f, 6.f, 6.f, 6.f),
+    HK_QUADREAL_CONSTANT(7.f, 7.f, 7.f, 7.f),
+    HK_QUADREAL_CONSTANT(15.f, 15.f, 15.f, 15.f),
+    HK_QUADREAL_CONSTANT(16.f, 16.f, 16.f, 16.f),
+    HK_QUADREAL_CONSTANT(255.f, 255.f, 255.f, 255.f),
+    HK_QUADREAL_CONSTANT(256.f, 256.f, 256.f, 256.f),
+    HK_QUADREAL_CONSTANT(8388608.f, 8388608.f, 8388608.f, 8388608.f),
+    HK_QUADREAL_CONSTANT(0.f, 0.f, 0.f, 0.f),
+    HK_QUADREAL_CONSTANT(1.f, 1.f, 1.f, 1.f),
+    HK_QUADREAL_CONSTANT(0.5f, 0.5f, 0.5f, 0.5f),
+    HK_QUADREAL_CONSTANT(0.3333333333f, 0.3333333333f, 0.3333333333f, 0.3333333333f),
+    HK_QUADREAL_CONSTANT(0.25f, 0.25f, 0.25f, 0.25f),
+    HK_QUADREAL_CONSTANT(0.2f, 0.2f, 0.2f, 0.2f),
+    HK_QUADREAL_CONSTANT(0.1666666667f, 0.1666666667f, 0.1666666667f, 0.1666666667f),
+    HK_QUADREAL_CONSTANT(0.1428571429f, 0.1428571429f, 0.1428571429f, 0.1428571429f),
+    HK_QUADREAL_CONSTANT(0.0666666667f, 0.0666666667f, 0.0666666667f, 0.0666666667f),
+    HK_QUADREAL_CONSTANT(0.0039215686f, 0.0039215686f, 0.0039215686f, 0.0039215686f),
+    HK_QUADREAL_CONSTANT(1.f, 0.f, 0.f, 0.f),
+    HK_QUADREAL_CONSTANT(0.f, 1.f, 0.f, 0.f),
+    HK_QUADREAL_CONSTANT(0.f, 0.f, 1.f, 0.f),
+    HK_QUADREAL_CONSTANT(0.f, 0.f, 0.f, 1.f),
+    HK_QUADREAL_CONSTANT(3.402823466e+38f, 3.402823466e+38f, 3.402823466e+38f, 3.402823466e+38f),
+    HK_QUADREAL_CONSTANT(1.192092896e-7f, 1.192092896e-7f, 1.192092896e-7f, 1.192092896e-7f),
+    HK_QUADREAL_CONSTANT(1.421085472e-14f, 1.421085472e-14f, 1.421085472e-14f, 1.421085472e-14f),
+    HK_QUADREAL_CONSTANT(-1.f, 1.f, -1.f, 1.f),
+    HK_QUADREAL_CONSTANT(8.f, 4.f, 2.f, 1.f),
+    HK_QUADREAL_CONSTANT(1.f, 1.f, 1.f, 1.f),
+    HK_QUADREAL_CONSTANT(32767.f, 32767.f, 32767.f, 32767.f),
+    HK_QUADREAL_CONSTANT(0.0000305185f, 0.0000305185f, 0.0000305185f, 0.0000305185f)
+};
+
+int HK_CALL hkColor::rgbFromChars(unsigned char red, unsigned char green, unsigned char blue, unsigned char alpha)
+{
+    return (static_cast<unsigned int>(alpha) << 24) |
+        (static_cast<unsigned int>(red) << 16) |
+        (static_cast<unsigned int>(green) << 8) |
+        static_cast<unsigned int>(blue);
+}
+
 hkMemoryRouter &hkGetMemoryRouter()
 {
     return *(hkMemoryRouter *)(hkUlong)TlsGetValue(*g_havokMemoryRouterTlsIndex);
