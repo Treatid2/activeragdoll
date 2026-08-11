@@ -5068,7 +5068,43 @@ void PreDriveToPoseHook(hkbRagdollDriver *driver, hkReal deltaTime, const hkbCon
             if (ragdoll->easeConstraintsAction) {
                 // Restore constraint limits from before we loosened them last time
 
-                hkpEaseConstraintsAction_restoreConstraints(ragdoll->easeConstraintsAction, 0.f);
+                // hkpEaseConstraintsAction keeps raw constraint pointers between
+                // frames.  Streaming can rebuild an actor's ragdoll while the
+                // driver and ActiveRagdoll entry remain alive, leaving the action
+                // with constraints that no longer belong to the current ragdoll.
+                // Calling restoreConstraints in that state dereferences stale
+                // constraint data.  Only restore when the current constraint set
+                // still contains every constraint captured by the action.
+                struct EaseConstraintsActionLayout
+                {
+                    std::byte base[0x48];
+                    hkArray<hkpConstraintInstance *> originalConstraints;
+                };
+                static_assert(offsetof(EaseConstraintsActionLayout, originalConstraints) == 0x48);
+
+                const auto *actionLayout = reinterpret_cast<const EaseConstraintsActionLayout *>(
+                    static_cast<hkpEaseConstraintsAction *>(ragdoll->easeConstraintsAction));
+                std::unordered_set<hkpConstraintInstance *> currentConstraints;
+                bool canRestoreConstraints = true;
+                for (hkpConstraintInstance *constraint : driver->ragdoll->getConstraintArray()) {
+                    if (!constraint || !constraint->getData()) {
+                        canRestoreConstraints = false;
+                        break;
+                    }
+                    currentConstraints.insert(constraint);
+                }
+                if (canRestoreConstraints) {
+                    for (hkpConstraintInstance *constraint : actionLayout->originalConstraints) {
+                        if (!constraint || currentConstraints.count(constraint) == 0) {
+                            canRestoreConstraints = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (canRestoreConstraints) {
+                    hkpEaseConstraintsAction_restoreConstraints(ragdoll->easeConstraintsAction, 0.f);
+                }
                 ragdoll->easeConstraintsAction = nullptr;
 
                 if (Config::options.loosenRagdollConstraintPivots) {
