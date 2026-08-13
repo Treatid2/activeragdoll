@@ -949,6 +949,5 @@ typedef void (*_bhkWorld_dtor)(bhkWorld *);
 typedef void(*_ActorState_GetActorRotationEuler)(ActorState *actorState, NiPoint3 &outEuler); // 4
 typedef float(*_ActorState_GetRotationSpeedZ)(ActorState *actorState); // 6
 typedef void(*_Actor_SetAlpha)(Actor *actor, float alpha); // E3
-typedef float(*_Actor_GetAlpha)(Actor *actor); // E4
 typedef void(*_NiNode_SetAt2)(NiNode *node, UInt32 index, NiAVObject *child);
 

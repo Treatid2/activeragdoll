@@ -2539,6 +2539,107 @@ struct ActorAlphaData
 };
 std::unordered_map<Actor *, ActorAlphaData> g_dontCollideUntilStoppedCollidingActorAlphas{};
 
+// Actor::SetAlpha walks the actor's scene graph and mutates shader properties.
+// The player-proxy manifold callback may run during Havok's multithreaded update,
+// so defer that work to SKSE task processing outside the callback.
+std::unordered_map<UInt32, ActorAlphaData> g_actorCollisionAlphaOverrides{};
+
+// The inherited VR headers label actor vtable entry E4 as a float-returning
+// GetAlpha, but that signature is not valid in Skyrim VR 1.4.15. Calling it can
+// leave an unrelated XMM value in the result and feed an enormous value to
+// Actor::SetAlpha. MiddleProcess::actorAlpha is the authoritative process
+// baseline. SetAlpha changes the render graph without updating this field, so
+// restoration must apply the current process baseline directly.
+bool TryGetActorAlpha(Actor *actor, float &alpha)
+{
+    if (!actor || !actor->processManager || !actor->processManager->middleProcess) {
+        return false;
+    }
+
+    alpha = actor->processManager->middleProcess->actorAlpha;
+    return alpha >= 0.f && alpha <= 3.f; // Normal 0..1, optionally +2 for no fade.
+}
+
+struct UpdateActorCollisionAlphaTask : TaskDelegate
+{
+    enum class Action : UInt8
+    {
+        Apply,
+        Restore
+    };
+
+    UpdateActorCollisionAlphaTask(UInt32 a_actorHandle, Action a_action)
+        : actorHandle(a_actorHandle), action(a_action) {}
+
+    static UpdateActorCollisionAlphaTask *Create(UInt32 a_actorHandle, Action a_action)
+    {
+        return new UpdateActorCollisionAlphaTask(a_actorHandle, a_action);
+    }
+
+    virtual void Run() override
+    {
+        if (action == Action::Restore) {
+            auto overrideIt = g_actorCollisionAlphaOverrides.find(actorHandle);
+            if (overrideIt == g_actorCollisionAlphaOverrides.end()) {
+                return;
+            }
+
+            NiPointer<TESObjectREFR> refr;
+            if (LookupREFRByHandle(actorHandle, refr)) {
+                if (Actor *actor = DYNAMIC_CAST(refr, TESObjectREFR, Actor)) {
+                    float processAlpha = -1.f;
+                    const float restoreAlpha = TryGetActorAlpha(actor, processAlpha)
+                        ? processAlpha
+                        : overrideIt->second.originalAlpha;
+                    get_vfunc<_Actor_SetAlpha>(actor, 0xE3)(actor, restoreAlpha);
+                }
+            }
+            g_actorCollisionAlphaOverrides.erase(overrideIt);
+            return;
+        }
+
+        if (g_actorCollisionAlphaOverrides.find(actorHandle) != g_actorCollisionAlphaOverrides.end()) {
+            return;
+        }
+
+        NiPointer<TESObjectREFR> refr;
+        if (!LookupREFRByHandle(actorHandle, refr)) {
+            return;
+        }
+        Actor *actor = DYNAMIC_CAST(refr, TESObjectREFR, Actor);
+        if (!actor) {
+            return;
+        }
+
+        float currentAlpha = -1.f;
+        if (!TryGetActorAlpha(actor, currentAlpha)) {
+            _MESSAGE("[CollisionAlpha] Invalid process alpha for actor %08X: %g", actor->formID, currentAlpha);
+            return;
+        }
+
+        float newAlpha = currentAlpha * Config::options.playerActorCollisionPhaseThroughAlphaMult;
+        if (currentAlpha >= 2.f) { // The game uses +2 alpha to signify no fade in/out.
+            newAlpha = 2.f + ((currentAlpha - 2.f) * Config::options.playerActorCollisionPhaseThroughAlphaMult);
+        }
+
+        if (newAlpha < 0.f || newAlpha > 3.f) {
+            _MESSAGE("[CollisionAlpha] Invalid target alpha for actor %08X: %g", actor->formID, newAlpha);
+            return;
+        }
+
+        get_vfunc<_Actor_SetAlpha>(actor, 0xE3)(actor, newAlpha);
+        g_actorCollisionAlphaOverrides.emplace(actorHandle, ActorAlphaData{ currentAlpha, newAlpha });
+    }
+
+    virtual void Dispose() override
+    {
+        delete this;
+    }
+
+    UInt32 actorHandle;
+    Action action;
+};
+
 std::unordered_set<Actor *> g_dontCollideUntilStoppedCollidingActors{};
 std::unordered_set<TESObjectREFR *> g_dontCollideActors{};
 std::mutex g_dontCollideActorsLock{};
@@ -6970,6 +7071,13 @@ void ahkpCharacterProxy_updateManifold_Hook(hkpCharacterProxy *proxy, hkpAllCdPo
         g_clearUpdateManifoldObjects = false;
 
         g_dontCollideUntilStoppedCollidingActors.clear();
+        for (auto &entry : g_dontCollideUntilStoppedCollidingActorAlphas) {
+            if (g_taskInterface) {
+                g_taskInterface->AddTask(UpdateActorCollisionAlphaTask::Create(
+                    GetOrCreateRefrHandle(entry.first),
+                    UpdateActorCollisionAlphaTask::Action::Restore));
+            }
+        }
         g_dontCollideUntilStoppedCollidingActorAlphas.clear();
 
         {
@@ -7055,15 +7163,14 @@ void ahkpCharacterProxy_updateManifold_Hook(hkpCharacterProxy *proxy, hkpAllCdPo
                             bool removeBecauseDontCollide = g_dontCollideUntilStoppedCollidingActors.find(actor) != g_dontCollideUntilStoppedCollidingActors.end();
 
                             if (removeBecauseDontCollide) {
-                                float currentAlpha = get_vfunc<_Actor_GetAlpha>(actor, 0xE4)(actor);
-                                float newAlpha = currentAlpha * Config::options.playerActorCollisionPhaseThroughAlphaMult;
-                                if (currentAlpha >= 2.f) { // game uses +2 alpha to signify no fade in/out
-                                    newAlpha = 2.f + ((currentAlpha - 2.f) * Config::options.playerActorCollisionPhaseThroughAlphaMult);
-                                }
                                 auto it = g_dontCollideUntilStoppedCollidingActorAlphas.find(actor);
                                 if (it == g_dontCollideUntilStoppedCollidingActorAlphas.end()) {
-                                    get_vfunc<_Actor_SetAlpha>(actor, 0xE3)(actor, newAlpha);
-                                    g_dontCollideUntilStoppedCollidingActorAlphas.emplace(actor, ActorAlphaData{ currentAlpha, newAlpha });
+                                    if (g_taskInterface) {
+                                        g_taskInterface->AddTask(UpdateActorCollisionAlphaTask::Create(
+                                            refrHandle,
+                                            UpdateActorCollisionAlphaTask::Action::Apply));
+                                        g_dontCollideUntilStoppedCollidingActorAlphas.emplace(actor, ActorAlphaData{});
+                                    }
                                 }
                                 g_physicsListener.IgnoreCollisionForSeconds(false, actor, *g_deltaTime * 2.f);
                                 g_physicsListener.IgnoreCollisionForSeconds(true, actor, *g_deltaTime * 2.f);
@@ -7120,9 +7227,10 @@ void ahkpCharacterProxy_updateManifold_Hook(hkpCharacterProxy *proxy, hkpAllCdPo
 
                         auto it = g_dontCollideUntilStoppedCollidingActorAlphas.find(actor);
                         if (it != g_dontCollideUntilStoppedCollidingActorAlphas.end()) {
-                            float currentAlpha = get_vfunc<_Actor_GetAlpha>(actor, 0xE4)(actor);
-                            if (currentAlpha == it->second.overriddenAlpha) {
-                                get_vfunc<_Actor_SetAlpha>(actor, 0xE3)(actor, it->second.originalAlpha);
+                            if (g_taskInterface) {
+                                g_taskInterface->AddTask(UpdateActorCollisionAlphaTask::Create(
+                                    actorHandle,
+                                    UpdateActorCollisionAlphaTask::Action::Restore));
                             }
                             g_dontCollideUntilStoppedCollidingActorAlphas.erase(it);
                         }
