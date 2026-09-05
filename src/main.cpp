@@ -4360,7 +4360,9 @@ void SetHiggsBodyReportingQuality(bhkWorld *world, const NiPointer<bhkRigidBody>
     if (hkBody->getWorld() != world->world || hkBody->getQualityType() == reportingQuality) return;
 
     BSWriteLocker lock(&world->worldLock);
-    if (hkBody->getWorld() != world->world || hkBody->getQualityType() == reportingQuality) return;
+    hkpWorld *lockedWorld = world->world;
+    if (!lockedWorld || body->hkBody != hkBody || hkBody->getWorld() != lockedWorld ||
+        hkBody->getQualityType() == reportingQuality) return;
 
     hkBody->setQualityType(reportingQuality);
     bhkWorld_UpdateCollisionFilterOnWorldObject(world, body);
