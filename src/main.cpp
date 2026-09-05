@@ -2533,12 +2533,6 @@ struct CollidedActorData
 };
 std::unordered_map<Actor *, CollidedActorData> g_collidedActorsPushAway{};
 
-struct ActorAlphaData
-{
-    float originalAlpha;
-    float overriddenAlpha;
-};
-
 enum class ActorAlphaEpisodeState : UInt8
 {
     PendingApply,
@@ -2567,12 +2561,20 @@ struct ActorAlphaEpisode
     UInt8 attempts{ 1 };
 };
 
+struct ActorAlphaData
+{
+    float originalAlpha;
+    float overriddenAlpha;
+    std::shared_ptr<ActorAlphaEpisode> owner;
+};
+
 std::unordered_map<UInt32, std::shared_ptr<ActorAlphaEpisode>> g_dontCollideUntilStoppedCollidingActorAlphas{};
 
 // Actor::SetAlpha walks the actor's scene graph and mutates shader properties.
 // The player-proxy manifold callback may run during Havok's multithreaded update,
 // so defer that work to SKSE task processing outside the callback.
 std::unordered_map<UInt32, ActorAlphaData> g_actorCollisionAlphaOverrides{};
+std::mutex g_actorCollisionAlphaOverridesLock{};
 
 // The inherited VR headers label actor vtable entry E4 as a float-returning
 // GetAlpha, but that signature is not valid in Skyrim VR 1.4.15. Calling it can
@@ -2612,8 +2614,10 @@ struct UpdateActorCollisionAlphaTask : TaskDelegate
         std::scoped_lock lock(episode->taskLock);
         const UInt32 actorHandle = episode->actorHandle;
         if (action == Action::Restore) {
+            std::scoped_lock overrideLock(g_actorCollisionAlphaOverridesLock);
             auto overrideIt = g_actorCollisionAlphaOverrides.find(actorHandle);
-            if (overrideIt == g_actorCollisionAlphaOverrides.end()) {
+            if (overrideIt == g_actorCollisionAlphaOverrides.end() ||
+                overrideIt->second.owner != episode) {
                 return;
             }
 
@@ -2630,11 +2634,6 @@ struct UpdateActorCollisionAlphaTask : TaskDelegate
 
         ActorAlphaEpisodeState expectedState = ActorAlphaEpisodeState::PendingApply;
         if (!episode->state.compare_exchange_strong(expectedState, ActorAlphaEpisodeState::Applying)) {
-            return;
-        }
-
-        if (g_actorCollisionAlphaOverrides.find(actorHandle) != g_actorCollisionAlphaOverrides.end()) {
-            episode->state.store(ActorAlphaEpisodeState::Applied);
             return;
         }
 
@@ -2668,8 +2667,18 @@ struct UpdateActorCollisionAlphaTask : TaskDelegate
         if (episode->state.load() != ActorAlphaEpisodeState::Applying) {
             return;
         }
+
+        std::scoped_lock overrideLock(g_actorCollisionAlphaOverridesLock);
+        if (episode->state.load() != ActorAlphaEpisodeState::Applying ||
+            g_actorCollisionAlphaOverrides.find(actorHandle) != g_actorCollisionAlphaOverrides.end()) {
+            expectedState = ActorAlphaEpisodeState::Applying;
+            episode->state.compare_exchange_strong(expectedState, ActorAlphaEpisodeState::Rejected);
+            return;
+        }
+
+        g_actorCollisionAlphaOverrides.emplace(
+            actorHandle, ActorAlphaData{ currentAlpha, newAlpha, episode });
         get_vfunc<_Actor_SetAlpha>(actor, 0xE3)(actor, newAlpha);
-        g_actorCollisionAlphaOverrides.emplace(actorHandle, ActorAlphaData{ currentAlpha, newAlpha });
         expectedState = ActorAlphaEpisodeState::Applying;
         episode->state.compare_exchange_strong(expectedState, ActorAlphaEpisodeState::Applied);
     }
