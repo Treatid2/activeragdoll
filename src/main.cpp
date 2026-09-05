@@ -5084,18 +5084,18 @@ void PreDriveToPoseHook(hkbRagdollDriver *driver, hkReal deltaTime, const hkbCon
 
                 const auto *actionLayout = reinterpret_cast<const EaseConstraintsActionLayout *>(
                     static_cast<hkpEaseConstraintsAction *>(ragdoll->easeConstraintsAction));
-                std::unordered_set<hkpConstraintInstance *> currentConstraints;
                 bool canRestoreConstraints = true;
                 for (hkpConstraintInstance *constraint : driver->ragdoll->getConstraintArray()) {
                     if (!constraint || !constraint->getData()) {
                         canRestoreConstraints = false;
                         break;
                     }
-                    currentConstraints.insert(constraint);
                 }
                 if (canRestoreConstraints) {
                     for (hkpConstraintInstance *constraint : actionLayout->originalConstraints) {
-                        if (!constraint || currentConstraints.count(constraint) == 0) {
+                        if (!constraint || std::ranges::find(
+                            driver->ragdoll->getConstraintArray(), constraint) ==
+                            driver->ragdoll->getConstraintArray().end()) {
                             canRestoreConstraints = false;
                             break;
                         }
