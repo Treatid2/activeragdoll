@@ -2538,26 +2538,56 @@ struct ActorAlphaData
     float originalAlpha;
     float overriddenAlpha;
 };
-std::unordered_map<Actor *, ActorAlphaData> g_dontCollideUntilStoppedCollidingActorAlphas{};
+
+enum class ActorAlphaEpisodeState : UInt8
+{
+    PendingApply,
+    Applying,
+    Applied,
+    Rejected,
+    Retired
+};
+
+constexpr UInt8 kActorAlphaMaxApplyAttempts = 3;
+constexpr UInt32 kActorAlphaRetryFrames = 30;
+
+// Retain the actor for the complete phase-through episode and every queued task.
+// Atomic state distinguishes rejected work from a successfully applied override.
+struct ActorAlphaEpisode
+{
+    ActorAlphaEpisode(UInt32 a_actorHandle, const NiPointer<TESObjectREFR>& a_actorReference,
+        UInt32 a_queuedFrame)
+        : actorHandle(a_actorHandle), actorReference(a_actorReference), lastQueuedFrame(a_queuedFrame) {}
+
+    UInt32 actorHandle;
+    NiPointer<TESObjectREFR> actorReference;
+    std::atomic<ActorAlphaEpisodeState> state{ ActorAlphaEpisodeState::PendingApply };
+    std::mutex taskLock;
+    UInt32 lastQueuedFrame;
+    UInt8 attempts{ 1 };
+};
+
+std::unordered_map<UInt32, std::shared_ptr<ActorAlphaEpisode>> g_dontCollideUntilStoppedCollidingActorAlphas{};
 
 // Actor::SetAlpha walks the actor's scene graph and mutates shader properties.
 // The player-proxy manifold callback may run during Havok's multithreaded update,
-// so keep the complete GetAlpha / SetAlpha transaction on the SKSE task queue.
+// so defer that work to SKSE task processing outside the callback.
 std::unordered_map<UInt32, ActorAlphaData> g_actorCollisionAlphaOverrides{};
 
-bool IsValidActorAlpha(float alpha)
-{
-    return std::isfinite(alpha) && alpha >= 0.f && alpha <= 3.f; // Normal 0..1, optionally +2 for no fade.
-}
-
+// The inherited VR headers label actor vtable entry E4 as a float-returning
+// GetAlpha, but that signature is not valid in Skyrim VR 1.4.15. Calling it can
+// leave an unrelated XMM value in the result and feed an enormous value to
+// Actor::SetAlpha. MiddleProcess::actorAlpha is the authoritative process
+// baseline. SetAlpha changes the render graph without updating this field, so
+// restoration must apply the current process baseline directly.
 bool TryGetActorAlpha(Actor *actor, float &alpha)
 {
-    if (!actor) {
+    if (!actor || !actor->processManager || !actor->processManager->middleProcess) {
         return false;
     }
 
-    alpha = get_vfunc<_Actor_GetAlpha>(actor, 0xE4)(actor);
-    return IsValidActorAlpha(alpha);
+    alpha = actor->processManager->middleProcess->actorAlpha;
+    return alpha >= 0.f && alpha <= 3.f; // Normal 0..1, optionally +2 for no fade.
 }
 
 struct UpdateActorCollisionAlphaTask : TaskDelegate
@@ -2568,62 +2598,58 @@ struct UpdateActorCollisionAlphaTask : TaskDelegate
         Restore
     };
 
-    UpdateActorCollisionAlphaTask(UInt32 a_actorHandle, Action a_action)
-        : actorHandle(a_actorHandle), action(a_action) {}
+    UpdateActorCollisionAlphaTask(std::shared_ptr<ActorAlphaEpisode> a_episode, Action a_action)
+        : episode(std::move(a_episode)), action(a_action) {}
 
-    static UpdateActorCollisionAlphaTask *Create(UInt32 a_actorHandle, Action a_action)
+    static UpdateActorCollisionAlphaTask *Create(
+        const std::shared_ptr<ActorAlphaEpisode>& a_episode, Action a_action)
     {
-        return new UpdateActorCollisionAlphaTask(a_actorHandle, a_action);
+        return new UpdateActorCollisionAlphaTask(a_episode, a_action);
     }
 
     virtual void Run() override
     {
+        std::scoped_lock lock(episode->taskLock);
+        const UInt32 actorHandle = episode->actorHandle;
         if (action == Action::Restore) {
             auto overrideIt = g_actorCollisionAlphaOverrides.find(actorHandle);
             if (overrideIt == g_actorCollisionAlphaOverrides.end()) {
                 return;
             }
 
-            NiPointer<TESObjectREFR> refr;
-            if (LookupREFRByHandle(actorHandle, refr)) {
-                if (Actor *actor = DYNAMIC_CAST(refr, TESObjectREFR, Actor)) {
-                    float currentAlpha = -1.f;
-                    if (!TryGetActorAlpha(actor, currentAlpha)) {
-                        _MESSAGE("[CollisionAlpha] Invalid alpha while restoring actor %08X: %g", actor->formID, currentAlpha);
-                    }
-                    else if (currentAlpha == overrideIt->second.overriddenAlpha) { // Only undo our own value.
-                        get_vfunc<_Actor_SetAlpha>(actor, 0xE3)(actor, overrideIt->second.originalAlpha);
-                    }
-                    else {
-                        _MESSAGE(
-                            "[CollisionAlpha] Actor %08X alpha changed externally; current=%g override=%g original=%g",
-                            actor->formID,
-                            currentAlpha,
-                            overrideIt->second.overriddenAlpha,
-                            overrideIt->second.originalAlpha);
-                    }
-                }
+            if (Actor *actor = DYNAMIC_CAST(episode->actorReference, TESObjectREFR, Actor)) {
+                float processAlpha = -1.f;
+                const float restoreAlpha = TryGetActorAlpha(actor, processAlpha)
+                    ? processAlpha
+                    : overrideIt->second.originalAlpha;
+                get_vfunc<_Actor_SetAlpha>(actor, 0xE3)(actor, restoreAlpha);
             }
             g_actorCollisionAlphaOverrides.erase(overrideIt);
             return;
         }
 
-        if (g_actorCollisionAlphaOverrides.find(actorHandle) != g_actorCollisionAlphaOverrides.end()) {
+        ActorAlphaEpisodeState expectedState = ActorAlphaEpisodeState::PendingApply;
+        if (!episode->state.compare_exchange_strong(expectedState, ActorAlphaEpisodeState::Applying)) {
             return;
         }
 
-        NiPointer<TESObjectREFR> refr;
-        if (!LookupREFRByHandle(actorHandle, refr)) {
+        if (g_actorCollisionAlphaOverrides.find(actorHandle) != g_actorCollisionAlphaOverrides.end()) {
+            episode->state.store(ActorAlphaEpisodeState::Applied);
             return;
         }
-        Actor *actor = DYNAMIC_CAST(refr, TESObjectREFR, Actor);
+
+        Actor *actor = DYNAMIC_CAST(episode->actorReference, TESObjectREFR, Actor);
         if (!actor) {
+            expectedState = ActorAlphaEpisodeState::Applying;
+            episode->state.compare_exchange_strong(expectedState, ActorAlphaEpisodeState::Rejected);
             return;
         }
 
         float currentAlpha = -1.f;
         if (!TryGetActorAlpha(actor, currentAlpha)) {
-            _MESSAGE("[CollisionAlpha] Invalid alpha for actor %08X: %g", actor->formID, currentAlpha);
+            _MESSAGE("[CollisionAlpha] Invalid process alpha for actor %08X: %g", actor->formID, currentAlpha);
+            expectedState = ActorAlphaEpisodeState::Applying;
+            episode->state.compare_exchange_strong(expectedState, ActorAlphaEpisodeState::Rejected);
             return;
         }
 
@@ -2632,13 +2658,20 @@ struct UpdateActorCollisionAlphaTask : TaskDelegate
             newAlpha = 2.f + ((currentAlpha - 2.f) * Config::options.playerActorCollisionPhaseThroughAlphaMult);
         }
 
-        if (!IsValidActorAlpha(newAlpha)) {
+        if (!(newAlpha >= 0.f && newAlpha <= 3.f)) {
             _MESSAGE("[CollisionAlpha] Invalid target alpha for actor %08X: %g", actor->formID, newAlpha);
+            expectedState = ActorAlphaEpisodeState::Applying;
+            episode->state.compare_exchange_strong(expectedState, ActorAlphaEpisodeState::Rejected);
             return;
         }
 
+        if (episode->state.load() != ActorAlphaEpisodeState::Applying) {
+            return;
+        }
         get_vfunc<_Actor_SetAlpha>(actor, 0xE3)(actor, newAlpha);
         g_actorCollisionAlphaOverrides.emplace(actorHandle, ActorAlphaData{ currentAlpha, newAlpha });
+        expectedState = ActorAlphaEpisodeState::Applying;
+        episode->state.compare_exchange_strong(expectedState, ActorAlphaEpisodeState::Applied);
     }
 
     virtual void Dispose() override
@@ -2646,7 +2679,7 @@ struct UpdateActorCollisionAlphaTask : TaskDelegate
         delete this;
     }
 
-    UInt32 actorHandle;
+    std::shared_ptr<ActorAlphaEpisode> episode;
     Action action;
 };
 
@@ -7082,9 +7115,10 @@ void ahkpCharacterProxy_updateManifold_Hook(hkpCharacterProxy *proxy, hkpAllCdPo
 
         g_dontCollideUntilStoppedCollidingActors.clear();
         for (auto &entry : g_dontCollideUntilStoppedCollidingActorAlphas) {
+            entry.second->state.store(ActorAlphaEpisodeState::Retired);
             if (g_taskInterface) {
                 g_taskInterface->AddTask(UpdateActorCollisionAlphaTask::Create(
-                    GetOrCreateRefrHandle(entry.first),
+                    entry.second,
                     UpdateActorCollisionAlphaTask::Action::Restore));
             }
         }
@@ -7173,13 +7207,28 @@ void ahkpCharacterProxy_updateManifold_Hook(hkpCharacterProxy *proxy, hkpAllCdPo
                             bool removeBecauseDontCollide = g_dontCollideUntilStoppedCollidingActors.find(actor) != g_dontCollideUntilStoppedCollidingActors.end();
 
                             if (removeBecauseDontCollide) {
-                                auto it = g_dontCollideUntilStoppedCollidingActorAlphas.find(actor);
+                                auto it = g_dontCollideUntilStoppedCollidingActorAlphas.find(refrHandle);
                                 if (it == g_dontCollideUntilStoppedCollidingActorAlphas.end()) {
                                     if (g_taskInterface) {
+                                        auto episode = std::make_shared<ActorAlphaEpisode>(
+                                            refrHandle, refr, *g_currentFrameCounter);
                                         g_taskInterface->AddTask(UpdateActorCollisionAlphaTask::Create(
-                                            refrHandle,
+                                            episode,
                                             UpdateActorCollisionAlphaTask::Action::Apply));
-                                        g_dontCollideUntilStoppedCollidingActorAlphas.emplace(actor, ActorAlphaData{});
+                                        g_dontCollideUntilStoppedCollidingActorAlphas.emplace(refrHandle, std::move(episode));
+                                    }
+                                }
+                                else if (it->second->state.load() == ActorAlphaEpisodeState::Rejected &&
+                                    it->second->attempts < kActorAlphaMaxApplyAttempts &&
+                                    *g_currentFrameCounter - it->second->lastQueuedFrame >= kActorAlphaRetryFrames) {
+                                    ActorAlphaEpisodeState rejected = ActorAlphaEpisodeState::Rejected;
+                                    if (it->second->state.compare_exchange_strong(
+                                        rejected, ActorAlphaEpisodeState::PendingApply)) {
+                                        it->second->attempts++;
+                                        it->second->lastQueuedFrame = *g_currentFrameCounter;
+                                        g_taskInterface->AddTask(UpdateActorCollisionAlphaTask::Create(
+                                            it->second,
+                                            UpdateActorCollisionAlphaTask::Action::Apply));
                                     }
                                 }
                                 g_physicsListener.IgnoreCollisionForSeconds(false, actor, *g_deltaTime * 2.f);
@@ -7230,28 +7279,30 @@ void ahkpCharacterProxy_updateManifold_Hook(hkpCharacterProxy *proxy, hkpAllCdPo
         if (collidingActorHandles.find(actorHandle) == collidingActorHandles.end()) {
             // Actor was colliding in the previous frame but not in the current frame
             UInt32 handle = actorHandle;
+            Actor *actor = nullptr;
             if (NiPointer<TESObjectREFR> refr; LookupREFRByHandle(handle, refr)) {
-                if (Actor *actor = DYNAMIC_CAST(refr, TESObjectREFR, Actor)) {
-                    if (g_dontCollideUntilStoppedCollidingActors.find(actor) != g_dontCollideUntilStoppedCollidingActors.end()) {
-                        g_dontCollideUntilStoppedCollidingActors.erase(actor);
+                actor = DYNAMIC_CAST(refr, TESObjectREFR, Actor);
+            }
 
-                        auto it = g_dontCollideUntilStoppedCollidingActorAlphas.find(actor);
-                        if (it != g_dontCollideUntilStoppedCollidingActorAlphas.end()) {
-                            if (g_taskInterface) {
-                                g_taskInterface->AddTask(UpdateActorCollisionAlphaTask::Create(
-                                    actorHandle,
-                                    UpdateActorCollisionAlphaTask::Action::Restore));
-                            }
-                            g_dontCollideUntilStoppedCollidingActorAlphas.erase(it);
-                        }
-                    }
+            auto alphaIt = g_dontCollideUntilStoppedCollidingActorAlphas.find(actorHandle);
+            if (alphaIt != g_dontCollideUntilStoppedCollidingActorAlphas.end()) {
+                if (!actor) {
+                    actor = DYNAMIC_CAST(alphaIt->second->actorReference, TESObjectREFR, Actor);
+                }
+                alphaIt->second->state.store(ActorAlphaEpisodeState::Retired);
+                if (g_taskInterface) {
+                    g_taskInterface->AddTask(UpdateActorCollisionAlphaTask::Create(
+                        alphaIt->second,
+                        UpdateActorCollisionAlphaTask::Action::Restore));
+                }
+                g_dontCollideUntilStoppedCollidingActorAlphas.erase(alphaIt);
+            }
 
-                    {
-                        std::scoped_lock lock(g_dontCollideActorsLock);
-                        if (g_dontCollideActors.find(actor) != g_dontCollideActors.end()) {
-                            g_dontCollideActors.erase(actor);
-                        }
-                    }
+            if (actor) {
+                g_dontCollideUntilStoppedCollidingActors.erase(actor);
+                std::scoped_lock lock(g_dontCollideActorsLock);
+                if (g_dontCollideActors.find(actor) != g_dontCollideActors.end()) {
+                    g_dontCollideActors.erase(actor);
                 }
             }
         }
