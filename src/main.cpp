@@ -4250,6 +4250,21 @@ void UpdateGrabbedActorMovementState(Actor *actor, bool doGrabbedActorMovement)
     }
 }
 
+void SetHiggsBodyReportingQuality(bhkWorld *world, const NiPointer<bhkRigidBody> &body)
+{
+    if (!world || !world->world || !body || !body->hkBody) return;
+
+    hkpRigidBody *hkBody = body->hkBody;
+    auto reportingQuality = hkpCollidableQualityType::HK_COLLIDABLE_QUALITY_KEYFRAMED_REPORTING;
+    if (hkBody->getWorld() != world->world || hkBody->getQualityType() == reportingQuality) return;
+
+    BSWriteLocker lock(&world->worldLock);
+    if (hkBody->getWorld() != world->world || hkBody->getQualityType() == reportingQuality) return;
+
+    hkBody->setQualityType(reportingQuality);
+    bhkWorld_UpdateCollisionFilterOnWorldObject(world, body);
+}
+
 void UpdateHiggsInfo(bhkWorld *world)
 {
     NiPointer<bhkRigidBody> rightHand = (bhkRigidBody *)g_higgsInterface->GetHandRigidBody(false);
@@ -4262,23 +4277,10 @@ void UpdateHiggsInfo(bhkWorld *world)
     g_rightWeapon = rightWeapon;
     g_leftWeapon = leftWeapon;
 
-    if (rightWeapon && rightWeapon->hkBody->getQualityType() != hkpCollidableQualityType::HK_COLLIDABLE_QUALITY_KEYFRAMED_REPORTING) {
-        rightWeapon->hkBody->setQualityType(hkpCollidableQualityType::HK_COLLIDABLE_QUALITY_KEYFRAMED_REPORTING);
-        bhkWorld_UpdateCollisionFilterOnWorldObject(world, rightWeapon);
-    }
-    if (leftWeapon && leftWeapon->hkBody->getQualityType() != hkpCollidableQualityType::HK_COLLIDABLE_QUALITY_KEYFRAMED_REPORTING) {
-        leftWeapon->hkBody->setQualityType(hkpCollidableQualityType::HK_COLLIDABLE_QUALITY_KEYFRAMED_REPORTING);
-        bhkWorld_UpdateCollisionFilterOnWorldObject(world, leftWeapon);
-    }
-
-    if (rightHand && rightHand->hkBody->getQualityType() != hkpCollidableQualityType::HK_COLLIDABLE_QUALITY_KEYFRAMED_REPORTING) {
-        rightHand->hkBody->setQualityType(hkpCollidableQualityType::HK_COLLIDABLE_QUALITY_KEYFRAMED_REPORTING);
-        bhkWorld_UpdateCollisionFilterOnWorldObject(world, rightHand);
-    }
-    if (leftHand && leftHand->hkBody->getQualityType() != hkpCollidableQualityType::HK_COLLIDABLE_QUALITY_KEYFRAMED_REPORTING) {
-        leftHand->hkBody->setQualityType(hkpCollidableQualityType::HK_COLLIDABLE_QUALITY_KEYFRAMED_REPORTING);
-        bhkWorld_UpdateCollisionFilterOnWorldObject(world, leftHand);
-    }
+    SetHiggsBodyReportingQuality(world, rightWeapon);
+    SetHiggsBodyReportingQuality(world, leftWeapon);
+    SetHiggsBodyReportingQuality(world, rightHand);
+    SetHiggsBodyReportingQuality(world, leftHand);
 
     if (rightHand) {
         g_higgsCollisionLayer = GetCollisionLayer(rightHand->hkBody);
