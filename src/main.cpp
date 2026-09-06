@@ -2572,24 +2572,25 @@ std::unordered_map<UInt32, std::shared_ptr<ActorAlphaEpisode>> g_dontCollideUnti
 
 // Actor::SetAlpha walks the actor's scene graph and mutates shader properties.
 // The player-proxy manifold callback may run during Havok's multithreaded update,
-// so defer that work to SKSE task processing outside the callback.
+// so keep the complete GetAlpha / SetAlpha transaction on the SKSE task queue.
 std::unordered_map<UInt32, ActorAlphaData> g_actorCollisionAlphaOverrides{};
 std::mutex g_actorCollisionAlphaOverridesLock{};
 
-// The inherited VR headers label actor vtable entry E4 as a float-returning
-// GetAlpha, but that signature is not valid in Skyrim VR 1.4.15. Calling it can
-// leave an unrelated XMM value in the result and feed an enormous value to
-// Actor::SetAlpha. MiddleProcess::actorAlpha is the authoritative process
-// baseline. SetAlpha changes the render graph without updating this field, so
-// restoration must apply the current process baseline directly.
+bool IsValidActorAlpha(float alpha)
+{
+    return std::isfinite(alpha) && alpha >= 0.f && alpha <= 3.f; // Normal 0..1, optionally +2 for no fade.
+}
+
+// E4 reads the same HighProcess::maxAlpha state that E3 updates. Treat that
+// value as externally shared: validate before use and only undo our own value.
 bool TryGetActorAlpha(Actor *actor, float &alpha)
 {
-    if (!actor || !actor->processManager || !actor->processManager->middleProcess) {
+    if (!actor) {
         return false;
     }
 
-    alpha = actor->processManager->middleProcess->actorAlpha;
-    return alpha >= 0.f && alpha <= 3.f; // Normal 0..1, optionally +2 for no fade.
+    alpha = get_vfunc<_Actor_GetAlpha>(actor, 0xE4)(actor);
+    return IsValidActorAlpha(alpha);
 }
 
 struct UpdateActorCollisionAlphaTask : TaskDelegate
@@ -2622,11 +2623,21 @@ struct UpdateActorCollisionAlphaTask : TaskDelegate
             }
 
             if (Actor *actor = DYNAMIC_CAST(episode->actorReference, TESObjectREFR, Actor)) {
-                float processAlpha = -1.f;
-                const float restoreAlpha = TryGetActorAlpha(actor, processAlpha)
-                    ? processAlpha
-                    : overrideIt->second.originalAlpha;
-                get_vfunc<_Actor_SetAlpha>(actor, 0xE3)(actor, restoreAlpha);
+                float currentAlpha = -1.f;
+                if (!TryGetActorAlpha(actor, currentAlpha)) {
+                    _MESSAGE("[CollisionAlpha] Invalid alpha while restoring actor %08X: %g", actor->formID, currentAlpha);
+                }
+                else if (currentAlpha == overrideIt->second.overriddenAlpha) { // Only undo our own value.
+                    get_vfunc<_Actor_SetAlpha>(actor, 0xE3)(actor, overrideIt->second.originalAlpha);
+                }
+                else {
+                    _MESSAGE(
+                        "[CollisionAlpha] Actor %08X alpha changed externally; current=%g override=%g original=%g",
+                        actor->formID,
+                        currentAlpha,
+                        overrideIt->second.overriddenAlpha,
+                        overrideIt->second.originalAlpha);
+                }
             }
             g_actorCollisionAlphaOverrides.erase(overrideIt);
             return;
@@ -2646,7 +2657,7 @@ struct UpdateActorCollisionAlphaTask : TaskDelegate
 
         float currentAlpha = -1.f;
         if (!TryGetActorAlpha(actor, currentAlpha)) {
-            _MESSAGE("[CollisionAlpha] Invalid process alpha for actor %08X: %g", actor->formID, currentAlpha);
+            _MESSAGE("[CollisionAlpha] Invalid alpha for actor %08X: %g", actor->formID, currentAlpha);
             expectedState = ActorAlphaEpisodeState::Applying;
             episode->state.compare_exchange_strong(expectedState, ActorAlphaEpisodeState::Rejected);
             return;
@@ -2657,7 +2668,7 @@ struct UpdateActorCollisionAlphaTask : TaskDelegate
             newAlpha = 2.f + ((currentAlpha - 2.f) * Config::options.playerActorCollisionPhaseThroughAlphaMult);
         }
 
-        if (!(newAlpha >= 0.f && newAlpha <= 3.f)) {
+        if (!IsValidActorAlpha(newAlpha)) {
             _MESSAGE("[CollisionAlpha] Invalid target alpha for actor %08X: %g", actor->formID, newAlpha);
             expectedState = ActorAlphaEpisodeState::Applying;
             episode->state.compare_exchange_strong(expectedState, ActorAlphaEpisodeState::Rejected);
