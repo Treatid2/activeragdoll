@@ -997,12 +997,21 @@ inline hkbGeneratorOutput::TrackHeader *GetTrackHeader(hkbGeneratorOutput &gener
 
 typedef bool(*_IAnimationGraphManagerHolder_GetAnimationGraphManagerImpl)(IAnimationGraphManagerHolder *_this, BSAnimationGraphManagerPtr &a_out);
 inline bool GetAnimationGraphManager(Actor *actor, BSAnimationGraphManagerPtr &out) {
-    // Some callers intentionally reuse the same local for a second query.
-    // Release the previous result before Skyrim overwrites it.
-    out.Reset();
     IAnimationGraphManagerHolder *animGraphManagerHolder = &actor->animGraphHolder;
     UInt64 *vtbl = *((UInt64 **)animGraphManagerHolder);
-    return ((_IAnimationGraphManagerHolder_GetAnimationGraphManagerImpl)(vtbl[0x02]))(animGraphManagerHolder, out);
+
+    // Query into empty storage so correctness does not depend on how Skyrim
+    // treats a pre-populated output. Preserve the existing owner when Skyrim
+    // returns the same manager, dropping only the newly acquired reference.
+    BSAnimationGraphManagerPtr next;
+    const bool result = ((_IAnimationGraphManagerHolder_GetAnimationGraphManagerImpl)(vtbl[0x02]))(animGraphManagerHolder, next);
+    if (result && out.ptr == next.ptr) {
+        next.Reset();
+    }
+    else {
+        out = std::move(next);
+    }
+    return result;
 }
 
 void MapHighResPoseLocalToLowResPoseWorld(hkbRagdollDriver *driver, const hkQsTransform &worldFromModel, const hkQsTransform *highResPoseLocal, hkQsTransform *lowResPoseWorldOut, bool applyRigidBodyT = true);
