@@ -5068,13 +5068,11 @@ void PreDriveToPoseHook(hkbRagdollDriver *driver, hkReal deltaTime, const hkbCon
             if (ragdoll->easeConstraintsAction) {
                 // Restore constraint limits from before we loosened them last time
 
-                // hkpEaseConstraintsAction keeps raw constraint pointers between
-                // frames.  Streaming can rebuild an actor's ragdoll while the
-                // driver and ActiveRagdoll entry remain alive, leaving the action
-                // with constraints that no longer belong to the current ragdoll.
-                // Calling restoreConstraints in that state dereferences stale
-                // constraint data.  Only restore when the current constraint set
-                // still contains every constraint captured by the action.
+                // hkpEaseConstraintsAction keeps raw constraint pointers but does
+                // not record which ragdoll supplied them. If the driver's ragdoll
+                // changes while this snapshot survives, restoring it would touch
+                // a different constraint generation. Require exact provenance and
+                // membership even though that replacement has not been reproduced.
                 struct EaseConstraintsActionLayout
                 {
                     std::byte base[0x48];
