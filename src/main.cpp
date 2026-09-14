@@ -7266,6 +7266,23 @@ void BSLookAtModifier_modify_Hook(BSLookAtModifier *_this, const hkbContext &con
 typedef NiAVObject * (*_PlayerCharacter_Load3D)(PlayerCharacter *player, bool a2);
 _PlayerCharacter_Load3D PlayerCharacter_Load3D_Original = nullptr;
 static RelocPtr<_PlayerCharacter_Load3D> PlayerCharacter_Load3D_vtbl(0x16E2580);
+
+void RebindAnimationGraphBoneNodes(BSAnimationGraphManager *manager, NiAVObject *oldNode, NiNode *newNode)
+{
+    SimpleLocker lock(&manager->updateLock);
+    for (UInt32 i = 0; i < manager->graphs.size; ++i) {
+        BSTSmartPointer<BShkbAnimationGraph> graph = manager->graphs.GetData()[i];
+        if (!graph.ptr) continue;
+
+        for (UInt32 j = 0; j < graph.ptr->boneNodes.count; ++j) {
+            BShkbAnimationGraph::BoneNodeEntry &entry = graph.ptr->boneNodes.entries[j];
+            if (entry.node == oldNode) {
+                entry.node = newNode;
+            }
+        }
+    }
+}
+
 NiAVObject * PlayerCharacter_Load3D_Hook(PlayerCharacter *player, bool a2)
 {
     NiAVObject *result = PlayerCharacter_Load3D_Original(player, a2);
@@ -7273,6 +7290,11 @@ NiAVObject * PlayerCharacter_Load3D_Hook(PlayerCharacter *player, bool a2)
     if (Config::options.convertThirdPersonWeaponToFadeNodes) {
         NiPointer<NiAVObject> root = player->GetNiRootNode(0);
         if (g_isVrikPresent && root) {
+            BSTSmartPointer<BSAnimationGraphManager> animGraphManager{ 0 };
+            if (!GetAnimationGraphManager(player, animGraphManager) || !animGraphManager.ptr) {
+                return result;
+            }
+
             // Essentially duplicate what the base game does with the 1st person skeleton to the 3rd person one, since vrik makes the 3rd person skeleton the main one.
             static BSFixedString nodeNames[] = {
                 BSFixedString("WEAPON"),
@@ -7294,9 +7316,11 @@ NiAVObject * PlayerCharacter_Load3D_Hook(PlayerCharacter *player, bool a2)
 
                         if (BSFadeNode *fadeNode = (BSFadeNode *)Heap_Allocate(sizeof(BSFadeNode))) {
                             BSFadeNode_CtorFromNiNode(fadeNode, node);
+                            NiPointer<BSFadeNode> retainedFadeNode = fadeNode;
                             BSFadeNode_SetStippleFade(fadeNode, false);
 
                             get_vfunc<_NiNode_SetAt2>(parent, 0x3D)(parent, parentIndex, fadeNode);
+                            RebindAnimationGraphBoneNodes(animGraphManager.ptr, node, fadeNode);
                             anyChanges = true;
 
                             // Bone tree needs to be updated since we swapped the node.
