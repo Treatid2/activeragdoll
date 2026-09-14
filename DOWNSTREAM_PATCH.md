@@ -1,4 +1,36 @@
-# PLANCK VR Stability Patch 1.2.0
+# PLANCK VR Stability Patch 1.3.0
+
+## Preserve animation bindings during node conversion
+
+This release updates animation graph bone
+pointers when PLANCK replaces a third-person weapon node with a BSFadeNode.
+Every pointer-equal entry in every graph of the retained current manager is
+updated; flattened-bone offsets and other entry metadata remain unchanged.
+This applies to all converted weapon nodes, including SHIELD.
+
+Both old and replacement nodes remain strongly referenced through the update.
+Scene replacement runs outside the animation lock; the old reference keeps
+any intervening animation access valid. Rebinding occurs under updateLock and
+finishes before the old reference is released. If no animation manager can be
+retained, conversion is skipped rather than leaving untracked replacements.
+
+Two full dumps show a Shield animation binding pointing to a lighting property
+whose contents match the Shield pose. Exact symbols establish that the
+conversion hook was installed and enabled in the later dump. This is strong
+evidence for a stale binding, not a historical recording of the free/reuse.
+The exact crash trigger passed an attended runtime stress test with many rapid
+Argonian preset changes and additional race changes. PLANCK logged repeated
+successful WEAPON and SHIELD rebinds. This was a qualitative targeted test,
+not exhaustive validation of every model-load timing case.
+
+`tests/bone_node_rebinding.cpp` exercises exact-match replacement, duplicate
+bindings, multiple graph tables, preserved metadata, unrelated/null entries,
+empty ranges, and repeat calls. `tools/Build-Planck.ps1` builds with managed
+scratch and disables all legacy deployment post-build events. The local
+SKSE VR SDK and Havok headers must be supplied separately; neither is copied
+into the corresponding-source directory.
+
+## Released baseline
 
 This downstream build is based on PLANCK 0.8.1 and contains the reviewed
 changes from:

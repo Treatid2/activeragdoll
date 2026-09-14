@@ -39,6 +39,7 @@
 #include "RE/havok.h"
 #include "RE/havok_behavior.h"
 #include "havok_ref_ptr.h"
+#include "bone_node_rebinding.h"
 #include "higgsinterface001.h"
 #include "main.h"
 #include "blender.h"
@@ -7322,6 +7323,12 @@ NiAVObject * PlayerCharacter_Load3D_Hook(PlayerCharacter *player, bool a2)
     if (Config::options.convertThirdPersonWeaponToFadeNodes) {
         NiPointer<NiAVObject> root = player->GetNiRootNode(0);
         if (g_isVrikPresent && root) {
+            BSAnimationGraphManagerPtr animGraphManager;
+            if (!GetAnimationGraphManager(player, animGraphManager) || !animGraphManager.ptr) {
+                _WARNING("Skipping weapon fade-node conversion: animation graph manager unavailable");
+                return result;
+            }
+
             // Essentially duplicate what the base game does with the 1st person skeleton to the 3rd person one, since vrik makes the 3rd person skeleton the main one.
             static BSFixedString nodeNames[] = {
                 BSFixedString("WEAPON"),
@@ -7343,9 +7350,26 @@ NiAVObject * PlayerCharacter_Load3D_Hook(PlayerCharacter *player, bool a2)
 
                         if (BSFadeNode *fadeNode = (BSFadeNode *)Heap_Allocate(sizeof(BSFadeNode))) {
                             BSFadeNode_CtorFromNiNode(fadeNode, node);
+                            NiPointer<BSFadeNode> retainedFadeNode = fadeNode;
                             BSFadeNode_SetStippleFade(fadeNode, false);
 
                             get_vfunc<_NiNode_SetAt2>(parent, 0x3D)(parent, parentIndex, fadeNode);
+                            // Keep node alive until animation writers stop using its old address.
+                            // Scene operations stay outside the graph lock to avoid lock inversion.
+                            std::size_t reboundBindings = 0;
+                            {
+                                SimpleLocker lock(&animGraphManager.ptr->updateLock);
+                                for (UInt32 i = 0; i < animGraphManager.ptr->graphs.size; ++i) {
+                                    auto* graph = animGraphManager.ptr->graphs.GetData()[i].ptr;
+                                    if (graph) {
+                                        reboundBindings += RebindBoneNodeEntries(graph->boneNodes.entries, graph->boneNodes.count,
+                                            static_cast<NiAVObject*>(node), fadeNode);
+                                    }
+                                }
+                            }
+                            if (reboundBindings) {
+                                _MESSAGE("Rebound %zu animation bone bindings for %s", reboundBindings, nodeName.data);
+                            }
                             anyChanges = true;
 
                             // Bone tree needs to be updated since we swapped the node.
