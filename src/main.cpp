@@ -1,5 +1,6 @@
 ﻿#include <functional>
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <regex>
 #include <limits>
@@ -7267,6 +7268,42 @@ typedef NiAVObject * (*_PlayerCharacter_Load3D)(PlayerCharacter *player, bool a2
 _PlayerCharacter_Load3D PlayerCharacter_Load3D_Original = nullptr;
 static RelocPtr<_PlayerCharacter_Load3D> PlayerCharacter_Load3D_vtbl(0x16E2580);
 
+// SKSEVR's legacy BSTSmartPointer is only pointer storage. The virtual getter
+// acquires a BSAnimationGraphManager reference, so this focused call must
+// balance that reference after the conversion pass. The manager's intrusive
+// count is the BSIntrusiveRefCounted base at object offset 0x08.
+class ScopedAnimationGraphManagerRef
+{
+public:
+    explicit ScopedAnimationGraphManagerRef(BSAnimationGraphManager *manager) noexcept :
+        manager_(manager)
+    {}
+
+    ScopedAnimationGraphManagerRef(const ScopedAnimationGraphManagerRef &) = delete;
+    ScopedAnimationGraphManagerRef &operator=(const ScopedAnimationGraphManagerRef &) = delete;
+
+    ~ScopedAnimationGraphManagerRef()
+    {
+        if (!manager_) return;
+
+        auto *refCount = reinterpret_cast<volatile LONG *>(
+            reinterpret_cast<std::uintptr_t>(manager_) + 0x08);
+        if (InterlockedDecrement(refCount) == 0) {
+            using Destruct = void(*)(BSAnimationGraphManager *, std::uint32_t);
+            auto *vtable = *reinterpret_cast<std::uintptr_t **>(manager_);
+            reinterpret_cast<Destruct>(vtable[0])(manager_, 1);
+        }
+    }
+
+    BSAnimationGraphManager *get() const noexcept
+    {
+        return manager_;
+    }
+
+private:
+    BSAnimationGraphManager *manager_;
+};
+
 void RebindAnimationGraphBoneNodes(BSAnimationGraphManager *manager, NiAVObject *oldNode, NiNode *newNode)
 {
     SimpleLocker lock(&manager->updateLock);
@@ -7294,6 +7331,7 @@ NiAVObject * PlayerCharacter_Load3D_Hook(PlayerCharacter *player, bool a2)
             if (!GetAnimationGraphManager(player, animGraphManager) || !animGraphManager.ptr) {
                 return result;
             }
+            ScopedAnimationGraphManagerRef retainedManager(animGraphManager.ptr);
 
             // Essentially duplicate what the base game does with the 1st person skeleton to the 3rd person one, since vrik makes the 3rd person skeleton the main one.
             static BSFixedString nodeNames[] = {
@@ -7320,7 +7358,7 @@ NiAVObject * PlayerCharacter_Load3D_Hook(PlayerCharacter *player, bool a2)
                             BSFadeNode_SetStippleFade(fadeNode, false);
 
                             get_vfunc<_NiNode_SetAt2>(parent, 0x3D)(parent, parentIndex, fadeNode);
-                            RebindAnimationGraphBoneNodes(animGraphManager.ptr, node, fadeNode);
+                            RebindAnimationGraphBoneNodes(retainedManager.get(), node, fadeNode);
                             anyChanges = true;
 
                             // Bone tree needs to be updated since we swapped the node.
