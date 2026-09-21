@@ -69,7 +69,7 @@ try {
     Copy-Item -LiteralPath $logs -Destination (Join-Path $Destination 'logs') -Recurse
     $sourceDestination = Join-Path $Destination 'Source'
     New-Item -ItemType Directory -Path $sourceDestination | Out-Null
-    foreach ($item in @('src', 'include', 'tools', 'tests', 'LICENSE', 'README.md', 'DOWNSTREAM_PATCH.md', 'activeragdoll.vcxproj', 'exports.def')) {
+    foreach ($item in @('src', 'include', 'package', 'tools', 'tests', 'LICENSE', 'README.md', 'DOWNSTREAM_PATCH.md', 'activeragdoll.vcxproj', 'exports.def')) {
         $sourceItem = Join-Path $sourceRoot $item
         if (Test-Path -LiteralPath $sourceItem) {
             Copy-Item -LiteralPath $sourceItem -Destination $sourceDestination -Recurse

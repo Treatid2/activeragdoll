@@ -1,5 +1,6 @@
 #include <chrono>
 #include <filesystem>
+#include <system_error>
 
 #include "config.h"
 #include "math_utils.h"
@@ -144,10 +145,11 @@ namespace Config {
         return ReadBool(name, val);
     }
 
-    bool RegisterOptionalBool(const std::string &name, bool &val)
+    bool RegisterPatchBool(const std::string &name, bool &val, bool defaultValue)
     {
         if (!g_registrationComplete) boolMap[name] = &val;
-        const std::string data = GetConfigOption("Settings", name.c_str());
+        val = defaultValue;
+        const std::string data = GetPatchConfigOption("Settings", name.c_str());
         if (data.empty()) return true;
         if (data == "1" || data == "true" || data == "TRUE" || data == "True") {
             val = true;
@@ -157,7 +159,7 @@ namespace Config {
             val = false;
             return true;
         }
-        _WARNING("Failed to read optional bool config option: %s", name.c_str());
+        _WARNING("Failed to read patch bool config option: %s", name.c_str());
         return false;
     }
 
@@ -569,8 +571,8 @@ namespace Config {
         if (!RegisterFloat("playerActorCollisionPhaseThroughAlphaMult", options.playerActorCollisionPhaseThroughAlphaMult)) success = false;
 
         if (!RegisterBool("convertThirdPersonWeaponToFadeNodes", options.convertThirdPersonWeaponToFadeNodes)) success = false;
-        if (!RegisterOptionalBool("enableWeaponNodeRebinding", options.enableWeaponNodeRebinding)) success = false;
-        if (!RegisterOptionalBool("rebindUnobservedWeaponNodes", options.rebindUnobservedWeaponNodes)) success = false;
+        if (!RegisterPatchBool("enableWeaponNodeRebinding", options.enableWeaponNodeRebinding, true)) success = false;
+        if (!RegisterPatchBool("rebindUnobservedWeaponNodes", options.rebindUnobservedWeaponNodes, false)) success = false;
         if (!RegisterFloat("playerMeleeCollisionDisabledWeaponAlpha", options.playerMeleeCollisionDisabledWeaponAlpha)) success = false;
 
         if (!RegisterBool("convertNonRagdollBipedObjectsToDeadBip", options.convertNonRagdollBipedObjectsToDeadBip)) success = false;
@@ -611,13 +613,21 @@ namespace Config {
     {
         namespace fs = std::filesystem;
 
-        static long long lastModifiedConfigTime = 0;
+        static long long lastModifiedConfigTime = -1;
+        static long long lastModifiedPatchConfigTime = -1;
 
         const std::string &path = GetConfigPath();
-        auto ftime = fs::last_write_time(path);
-        auto time = ftime.time_since_epoch().count();
-        if (time > lastModifiedConfigTime) {
+        const std::string &patchPath = GetPatchConfigPath();
+        const auto getLastWriteTime = [](const std::string &filePath) {
+            std::error_code error;
+            const auto writeTime = fs::last_write_time(filePath, error);
+            return error ? 0LL : static_cast<long long>(writeTime.time_since_epoch().count());
+        };
+        const long long time = getLastWriteTime(path);
+        const long long patchTime = getLastWriteTime(patchPath);
+        if (time != lastModifiedConfigTime || patchTime != lastModifiedPatchConfigTime) {
             lastModifiedConfigTime = time;
+            lastModifiedPatchConfigTime = patchTime;
 
             // Reload config if file has been modified since we last read it
             if (Config::ReadConfigOptions()) {
@@ -649,21 +659,43 @@ namespace Config {
         return s_configPath;
     }
 
-    std::string GetConfigOption(const char *section, const char *key)
+    const std::string &GetPatchConfigPath()
     {
-        std::string	result;
+        static std::string s_patchConfigPath;
 
-        const std::string &configPath = GetConfigPath();
+        if (s_patchConfigPath.empty()) {
+            std::string runtimePath = GetRuntimeDirectory();
+            if (!runtimePath.empty()) {
+                s_patchConfigPath = runtimePath + "Data\\SKSE\\Plugins\\PLANCK-VR-Stability-Patch.ini";
+
+                _MESSAGE("patch config path = %s", s_patchConfigPath.c_str());
+            }
+        }
+
+        return s_patchConfigPath;
+    }
+
+    static std::string GetConfigOptionFromPath(const std::string &configPath, const char *section, const char *key)
+    {
+        std::string result;
+
         if (!configPath.empty()) {
-            static char resultBuf[4096];
-            resultBuf[0] = 0;
-
-            UInt32	resultLen = GetPrivateProfileString(section, key, NULL, resultBuf, sizeof(resultBuf), configPath.c_str());
-
+            char resultBuf[4096]{};
+            GetPrivateProfileString(section, key, NULL, resultBuf, sizeof(resultBuf), configPath.c_str());
             result = resultBuf;
         }
 
         return result;
+    }
+
+    std::string GetConfigOption(const char *section, const char *key)
+    {
+        return GetConfigOptionFromPath(GetConfigPath(), section, key);
+    }
+
+    std::string GetPatchConfigOption(const char *section, const char *key)
+    {
+        return GetConfigOptionFromPath(GetPatchConfigPath(), section, key);
     }
 
     bool GetConfigOptionDouble(const char *section, const char *key, double *out)

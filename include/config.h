@@ -498,8 +498,10 @@ namespace Config {
     bool ReloadIfModified();
 
     const std::string &GetConfigPath();
+    const std::string &GetPatchConfigPath();
 
     std::string GetConfigOption(const char *section, const char *key);
+    std::string GetPatchConfigOption(const char *section, const char *key);
 
     bool GetConfigOptionDouble(const char *section, const char *key, double *out);
     bool GetConfigOptionFloat(const char *section, const char *key, float *out);

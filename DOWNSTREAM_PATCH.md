@@ -1,4 +1,11 @@
-# PLANCK VR Stability Patch 1.3.1
+# PLANCK VR Stability Patch 1.3.2
+
+## Independent patch configuration
+
+Release 1.3.2 moves the downstream weapon-node controls out of PLANCK's
+`activeragdoll.ini`. The patch now owns and reloads
+`Data\SKSE\Plugins\PLANCK-VR-Stability-Patch.ini`, so installing or updating
+the stability patch cannot replace a user's PLANCK settings.
 
 ## Fail-closed weapon-node rebinding
 
@@ -7,8 +14,9 @@ This release narrows the 1.3.0 animation-binding correction to the exact
 nodes keep PLANCK 0.8.1 behavior unless the user explicitly enables the wider
 diagnostic mode.
 
-Two optional settings use safe defaults when absent from an existing
-`Data\SKSE\Plugins\activeragdoll.ini`:
+Two settings live in the patch-owned
+`Data\SKSE\Plugins\PLANCK-VR-Stability-Patch.ini`, keeping them independent
+from PLANCK's existing configuration:
 
 ```ini
 [Settings]
@@ -16,6 +24,7 @@ enableWeaponNodeRebinding=true
 rebindUnobservedWeaponNodes=false
 ```
 
+The release archive includes this file with the safe defaults shown above.
 Set `enableWeaponNodeRebinding=false` to disable the 1.3.x animation-table update
 without disabling PLANCK's original fade-node conversion. Set
 `rebindUnobservedWeaponNodes=true` to restore 1.3.0's wider `WEAPON`, weapon-type,
