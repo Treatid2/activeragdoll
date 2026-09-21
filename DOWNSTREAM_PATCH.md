@@ -1,4 +1,33 @@
-# PLANCK VR Stability Patch 1.3.0
+# PLANCK VR Stability Patch 1.3.1
+
+## Fail-closed weapon-node rebinding
+
+This release narrows the 1.3.0 animation-binding correction to the exact
+`SHIELD` node demonstrated by retained crash dumps. Other converted weapon
+nodes keep PLANCK 0.8.1 behavior unless the user explicitly enables the wider
+diagnostic mode.
+
+Two optional settings use safe defaults when absent from an existing
+`Data\SKSE\Plugins\activeragdoll.ini`:
+
+```ini
+[Settings]
+enableWeaponNodeRebinding=true
+rebindUnobservedWeaponNodes=false
+```
+
+Set `enableWeaponNodeRebinding=false` to disable the 1.3.x animation-table update
+without disabling PLANCK's original fade-node conversion. Set
+`rebindUnobservedWeaponNodes=true` to restore 1.3.0's wider `WEAPON`, weapon-type,
+`SHIELD`, and `WeaponBack` coverage for diagnosis.
+
+Before replacing an observed node, the patch now verifies the parent slot,
+flattened-bone identity, animation-table ranges, current manager, and exact
+replacement state. The animation and flattened-bone pointers are committed
+together under the graph update lock. An unexpected post-replacement failure
+retains the displaced node and disables further affected conversions rather
+than allowing an unidentified reader to observe freed storage. Each committed
+update writes one bounded result line to `activeragdoll.log`.
 
 ## Preserve animation bindings during node conversion
 

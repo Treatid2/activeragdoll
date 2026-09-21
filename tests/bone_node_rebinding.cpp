@@ -14,6 +14,11 @@ struct Entry {
 
 int main()
 {
+    assert(ShouldRebindConvertedWeaponNode("SHIELD", true, false));
+    assert(!ShouldRebindConvertedWeaponNode("WEAPON", true, false));
+    assert(ShouldRebindConvertedWeaponNode("WEAPON", true, true));
+    assert(!ShouldRebindConvertedWeaponNode("SHIELD", false, true));
+
     Node oldNode, replacement, unrelated;
     Entry first[] = {{&oldNode, 0xFFFFFFFF, 11}, {&unrelated, 7, 12},
         {&oldNode, 13, 14}, {nullptr, 15, 16}};
@@ -34,4 +39,8 @@ int main()
     assert(RebindBoneNodeEntries(first, 4, oldBase, &fadeNode) == 2);
     assert(first[0].node == &fadeNode && first[2].node == &fadeNode);
     assert(first[0].flattenedBoneTreeOffset == 0xFFFFFFFF && first[0].metadata == 11);
+    assert(IsBoneNodeEntryRangeValid(first, 4));
+    assert(IsBoneNodeEntryRangeValid(static_cast<Entry*>(nullptr), 0));
+    assert(!IsBoneNodeEntryRangeValid(static_cast<Entry*>(nullptr), 1));
+    assert(!IsBoneNodeEntryRangeValid(first, 4097));
 }

@@ -1,5 +1,6 @@
 ﻿#include <functional>
 #include <atomic>
+#include <cstring>
 #include <string>
 #include <regex>
 #include <limits>
@@ -7,6 +8,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <new>
+#include <vector>
 
 #include <Physics/Collide/Shape/Convex/ConvexVertices/hkpConvexVerticesShape.h>
 #include <Physics/Collide/Shape/Convex/Capsule/hkpCapsuleShape.h>
@@ -7316,6 +7318,12 @@ void BSLookAtModifier_modify_Hook(BSLookAtModifier *_this, const hkbContext &con
 typedef NiAVObject * (*_PlayerCharacter_Load3D)(PlayerCharacter *player, bool a2);
 _PlayerCharacter_Load3D PlayerCharacter_Load3D_Original = nullptr;
 static RelocPtr<_PlayerCharacter_Load3D> PlayerCharacter_Load3D_vtbl(0x16E2580);
+static bool g_weaponNodeRebindingFailedClosed = false;
+static std::vector<NiPointer<NiAVObject>>& GetFailedRebindNodeQuarantine()
+{
+    static auto* quarantine = new std::vector<NiPointer<NiAVObject>>{};
+    return *quarantine;
+}
 NiAVObject * PlayerCharacter_Load3D_Hook(PlayerCharacter *player, bool a2)
 {
     NiAVObject *result = PlayerCharacter_Load3D_Original(player, a2);
@@ -7348,35 +7356,111 @@ NiAVObject * PlayerCharacter_Load3D_Hook(PlayerCharacter *player, bool a2)
                         NiNode *parent = node->m_parent;
                         UInt32 parentIndex = node->unk038;
 
+                        if (!parent || !parent->m_children.m_data ||
+                            parentIndex >= parent->m_children.m_emptyRunStart ||
+                            parent->m_children.m_data[parentIndex] != node) {
+                            _WARNING("Skipping fade-node conversion for %s: parent slot changed", nodeName.data);
+                            continue;
+                        }
+
+                        const bool shouldRebind = ShouldRebindConvertedWeaponNode(
+                            nodeName.data ? nodeName.data : "",
+                            Config::options.enableWeaponNodeRebinding,
+                            Config::options.rebindUnobservedWeaponNodes);
+                        BSFlattenedBoneTree *boneTree = GetParentBoneTree(node);
+                        int boneIndex = boneTree ? BSFlattenedBoneTree_GetBoneIndex(boneTree, &nodeName) : -1;
+
+                        if (shouldRebind) {
+                            if (g_weaponNodeRebindingFailedClosed) {
+                                _WARNING("Skipping fade-node conversion for %s: rebinding is fail-closed", nodeName.data);
+                                continue;
+                            }
+                            if (!boneTree || !boneTree->boneEntries || boneIndex < 0 ||
+                                static_cast<UInt32>(boneIndex) >= boneTree->numBones ||
+                                boneTree->boneEntries[boneIndex].node != node ||
+                                !boneTree->boneEntries[boneIndex].nodeName.data ||
+                                std::strcmp(boneTree->boneEntries[boneIndex].nodeName.data, nodeName.data) != 0) {
+                                _WARNING("Skipping fade-node conversion for %s: flattened bone entry was not exact", nodeName.data);
+                                continue;
+                            }
+
+                            bool graphRangesValid = true;
+                            {
+                                SimpleLocker lock(&animGraphManager.ptr->updateLock);
+                                for (UInt32 i = 0; i < animGraphManager.ptr->graphs.size; ++i) {
+                                    auto* graph = animGraphManager.ptr->graphs.GetData()[i].ptr;
+                                    if (graph && !IsBoneNodeEntryRangeValid(
+                                            graph->boneNodes.entries, graph->boneNodes.count)) {
+                                        graphRangesValid = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!graphRangesValid) {
+                                _WARNING("Skipping fade-node conversion for %s: animation bone table was invalid", nodeName.data);
+                                continue;
+                            }
+                        }
+
                         if (BSFadeNode *fadeNode = (BSFadeNode *)Heap_Allocate(sizeof(BSFadeNode))) {
                             BSFadeNode_CtorFromNiNode(fadeNode, node);
                             NiPointer<BSFadeNode> retainedFadeNode = fadeNode;
                             BSFadeNode_SetStippleFade(fadeNode, false);
 
                             get_vfunc<_NiNode_SetAt2>(parent, 0x3D)(parent, parentIndex, fadeNode);
-                            // Keep node alive until animation writers stop using its old address.
-                            // Scene operations stay outside the graph lock to avoid lock inversion.
                             std::size_t reboundBindings = 0;
-                            {
-                                SimpleLocker lock(&animGraphManager.ptr->updateLock);
-                                for (UInt32 i = 0; i < animGraphManager.ptr->graphs.size; ++i) {
-                                    auto* graph = animGraphManager.ptr->graphs.GetData()[i].ptr;
-                                    if (graph) {
-                                        reboundBindings += RebindBoneNodeEntries(graph->boneNodes.entries, graph->boneNodes.count,
-                                            static_cast<NiAVObject*>(node), fadeNode);
+                            bool rebindCommitted = !shouldRebind;
+                            if (shouldRebind) {
+                                BSAnimationGraphManagerPtr currentManager;
+                                if (GetAnimationGraphManager(player, currentManager) &&
+                                    currentManager.ptr == animGraphManager.ptr) {
+                                    SimpleLocker lock(&animGraphManager.ptr->updateLock);
+                                    bool invariantsHold = parent->m_children.m_data &&
+                                        parentIndex < parent->m_children.m_emptyRunStart &&
+                                        parent->m_children.m_data[parentIndex] == fadeNode &&
+                                        boneTree->boneEntries[boneIndex].node == node;
+                                    for (UInt32 i = 0; invariantsHold && i < animGraphManager.ptr->graphs.size; ++i) {
+                                        auto* graph = animGraphManager.ptr->graphs.GetData()[i].ptr;
+                                        if (graph && !IsBoneNodeEntryRangeValid(
+                                                graph->boneNodes.entries, graph->boneNodes.count)) {
+                                            invariantsHold = false;
+                                        }
+                                    }
+                                    if (invariantsHold) {
+                                        for (UInt32 i = 0; i < animGraphManager.ptr->graphs.size; ++i) {
+                                            auto* graph = animGraphManager.ptr->graphs.GetData()[i].ptr;
+                                            if (graph) {
+                                                reboundBindings += RebindBoneNodeEntries(
+                                                    graph->boneNodes.entries, graph->boneNodes.count,
+                                                    static_cast<NiAVObject*>(node), fadeNode);
+                                            }
+                                        }
+                                        boneTree->boneEntries[boneIndex].node = fadeNode;
+                                        rebindCommitted = true;
                                     }
                                 }
                             }
-                            if (reboundBindings) {
-                                _MESSAGE("Rebound %zu animation bone bindings for %s", reboundBindings, nodeName.data);
+
+                            if (shouldRebind && !rebindCommitted) {
+                                // Retain the displaced node so an unexpected reader cannot observe freed storage.
+                                GetFailedRebindNodeQuarantine().emplace_back(node);
+                                g_weaponNodeRebindingFailedClosed = true;
+                                _ERROR("Weapon-node rebind failed closed for %s; retained old node and disabled further conversions",
+                                    nodeName.data);
+                            } else if (shouldRebind) {
+                                _MESSAGE("Weapon-node rebind committed: node=%s entries=%zu scope=%s",
+                                    nodeName.data, reboundBindings,
+                                    Config::options.rebindUnobservedWeaponNodes ? "all" : "observed");
                             }
                             anyChanges = true;
 
                             // Bone tree needs to be updated since we swapped the node.
-                            if (BSFlattenedBoneTree *boneTree = GetParentBoneTree(fadeNode)) {
-                                int boneIndex = BSFlattenedBoneTree_GetBoneIndex(boneTree, &nodeName);
-                                if (boneIndex >= 0) {
-                                    boneTree->boneEntries[boneIndex].node = fadeNode;
+                            if (!shouldRebind) {
+                                if (BSFlattenedBoneTree *replacementBoneTree = GetParentBoneTree(fadeNode)) {
+                                    int replacementBoneIndex = BSFlattenedBoneTree_GetBoneIndex(replacementBoneTree, &nodeName);
+                                    if (replacementBoneIndex >= 0) {
+                                        replacementBoneTree->boneEntries[replacementBoneIndex].node = fadeNode;
+                                    }
                                 }
                             }
                         }

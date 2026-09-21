@@ -4,7 +4,9 @@ param(
     [string]$SdkSource = 'L:\Codex\shared\dependencies\sksevr_2_00_12\src',
     [string]$HavokSource = 'L:\Codex\shared\sdk\Havok\hk2010_2_0_r1\Source',
     [string]$VisualStudio = 'C:\Program Files\Microsoft Visual Studio\18\Community',
-    [string]$Destination = 'L:\Codex\artifacts\PLANCK\diagnostics\20260914-bone-node-lifetime'
+    [string]$Destination = 'L:\Codex\artifacts\PLANCK\diagnostics\20260914-bone-node-lifetime',
+    [switch]$AcknowledgeLowSpace,
+    [string]$LowSpaceReason
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -17,7 +19,20 @@ foreach ($required in @($SdkSource, $HavokSource, $msbuild, $runner, $scratchToo
     if (!(Test-Path -LiteralPath $required)) { throw "Missing build input: $required" }
 }
 if (Test-Path -LiteralPath $Destination) { throw "Refusing to overwrite artifact directory: $Destination" }
-$allocation = & $scratchTool acquire -Kind build -ProjectPath $sourceRoot -ExpectedGiB 3 -Compact | ConvertFrom-Json
+$acquireParameters = @{
+    Kind = 'build'
+    ProjectPath = $sourceRoot
+    ExpectedGiB = 3
+    Compact = $true
+}
+if ($AcknowledgeLowSpace) {
+    if ([string]::IsNullOrWhiteSpace($LowSpaceReason)) {
+        throw 'LowSpaceReason is required with AcknowledgeLowSpace'
+    }
+    $acquireParameters.AcknowledgeLowSpace = $true
+    $acquireParameters.LowSpaceReason = $LowSpaceReason
+}
+$allocation = & $scratchTool acquire @acquireParameters | ConvertFrom-Json
 if (!$allocation.ok -or $allocation.state -ne 'active') { throw 'Scratch acquisition failed' }
 $work = $allocation.data.workPath
 $receipts = @()
@@ -81,5 +96,6 @@ catch {
     throw
 }
 finally {
-    & $scratchTool release -Id $allocation.data.id -Disposition reclaimable -Compact
+    & $scratchTool release -Id $allocation.data.id -Disposition discarded `
+        -Reason 'Promoted DLL, PDB, source, receipts, and logs; remaining build intermediates are reconstructible.' -Compact
 }

@@ -407,6 +407,8 @@ namespace Config {
         float playerActorCollisionPhaseThroughAlphaMult = 0.5f;
 
         bool convertThirdPersonWeaponToFadeNodes = true;
+        bool enableWeaponNodeRebinding = true;
+        bool rebindUnobservedWeaponNodes = false;
         float playerMeleeCollisionDisabledWeaponAlpha = 0.25f;
 
         bool convertNonRagdollBipedObjectsToDeadBip = true;

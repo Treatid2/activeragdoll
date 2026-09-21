@@ -144,6 +144,23 @@ namespace Config {
         return ReadBool(name, val);
     }
 
+    bool RegisterOptionalBool(const std::string &name, bool &val)
+    {
+        if (!g_registrationComplete) boolMap[name] = &val;
+        const std::string data = GetConfigOption("Settings", name.c_str());
+        if (data.empty()) return true;
+        if (data == "1" || data == "true" || data == "TRUE" || data == "True") {
+            val = true;
+            return true;
+        }
+        if (data == "0" || data == "false" || data == "FALSE" || data == "False") {
+            val = false;
+            return true;
+        }
+        _WARNING("Failed to read optional bool config option: %s", name.c_str());
+        return false;
+    }
+
     bool SetSettingDouble(const std::string_view &name, double val)
     {
         if (auto it = doubleMap.find(name); it != doubleMap.end()) {
@@ -552,6 +569,8 @@ namespace Config {
         if (!RegisterFloat("playerActorCollisionPhaseThroughAlphaMult", options.playerActorCollisionPhaseThroughAlphaMult)) success = false;
 
         if (!RegisterBool("convertThirdPersonWeaponToFadeNodes", options.convertThirdPersonWeaponToFadeNodes)) success = false;
+        if (!RegisterOptionalBool("enableWeaponNodeRebinding", options.enableWeaponNodeRebinding)) success = false;
+        if (!RegisterOptionalBool("rebindUnobservedWeaponNodes", options.rebindUnobservedWeaponNodes)) success = false;
         if (!RegisterFloat("playerMeleeCollisionDisabledWeaponAlpha", options.playerMeleeCollisionDisabledWeaponAlpha)) success = false;
 
         if (!RegisterBool("convertNonRagdollBipedObjectsToDeadBip", options.convertNonRagdollBipedObjectsToDeadBip)) success = false;
