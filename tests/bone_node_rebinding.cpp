@@ -12,7 +12,7 @@ struct Entry {
     std::uint32_t metadata;
 };
 
-int main()
+void TestBoneNodeRebinding()
 {
     assert(ShouldRebindConvertedWeaponNode("SHIELD", true, false));
     assert(!ShouldRebindConvertedWeaponNode("WEAPON", true, false));

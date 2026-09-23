@@ -93,6 +93,9 @@
     <ClInclude Include="include\draw.h">
       <Filter>include</Filter>
     </ClInclude>
+    <ClInclude Include="include\staged_intrusive_output.h">
+      <Filter>include</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="exports.def" />

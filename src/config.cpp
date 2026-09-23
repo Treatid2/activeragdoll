@@ -573,6 +573,7 @@ namespace Config {
         if (!RegisterBool("convertThirdPersonWeaponToFadeNodes", options.convertThirdPersonWeaponToFadeNodes)) success = false;
         if (!RegisterPatchBool("enableWeaponNodeRebinding", options.enableWeaponNodeRebinding, true)) success = false;
         if (!RegisterPatchBool("rebindUnobservedWeaponNodes", options.rebindUnobservedWeaponNodes, false)) success = false;
+        if (!RegisterPatchBool("enableHiggsBodyReportingQualityRefresh", options.enableHiggsBodyReportingQualityRefresh, true)) success = false;
         if (!RegisterFloat("playerMeleeCollisionDisabledWeaponAlpha", options.playerMeleeCollisionDisabledWeaponAlpha)) success = false;
 
         if (!RegisterBool("convertNonRagdollBipedObjectsToDeadBip", options.convertNonRagdollBipedObjectsToDeadBip)) success = false;

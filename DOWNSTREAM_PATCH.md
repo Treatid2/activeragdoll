@@ -1,11 +1,31 @@
-# PLANCK VR Stability Patch 1.3.2
+# PLANCK VR Stability Patch 1.3.3
+
+## Correct retained animation-manager replacement
+
+Release 1.3.3 restores the final reviewed correction from PLANCK PR 3. The
+1.3.2 release lineage accidentally contained the earlier implementation,
+which released a caller's retained animation graph manager before asking
+Skyrim for the replacement. Consecutive queries could therefore expose a
+release-before-acquire gap to VRIK and PLANCK readers.
+
+The query now writes into an empty temporary owner. If Skyrim returns the same
+manager, only the newly acquired reference is released; if it returns a new
+manager, the old owner is released only after the new one has been acquired.
+This correction is always enabled because restoring the old lifetime gap is
+not a safe diagnostic mode.
+
+`tests/staged_intrusive_output.cpp` verifies same-manager, replacement-manager,
+and failed-query ownership. The query callback observes the existing owner in
+all three cases, proving that it remains retained throughout the engine call.
 
 ## Independent patch configuration
 
-Release 1.3.2 moves the downstream weapon-node controls out of PLANCK's
-`activeragdoll.ini`. The patch now owns and reloads
+Release 1.2.0 moved the downstream weapon-node controls out of PLANCK's
+`activeragdoll.ini`. The patch owns
 `Data\SKSE\Plugins\PLANCK-VR-Stability-Patch.ini`, so installing or updating
-the stability patch cannot replace a user's PLANCK settings.
+the stability patch cannot replace a user's PLANCK settings. Release builds
+read this file once during plugin startup; restart Skyrim after changing it.
+The log now records the patch version and every effective downstream setting.
 
 ## Fail-closed weapon-node rebinding
 
@@ -22,6 +42,7 @@ from PLANCK's existing configuration:
 [Settings]
 enableWeaponNodeRebinding=true
 rebindUnobservedWeaponNodes=false
+enableHiggsBodyReportingQualityRefresh=true
 ```
 
 The release archive includes this file with the safe defaults shown above.
@@ -29,6 +50,17 @@ Set `enableWeaponNodeRebinding=false` to disable the 1.3.x animation-table updat
 without disabling PLANCK's original fade-node conversion. Set
 `rebindUnobservedWeaponNodes=true` to restore 1.3.0's wider `WEAPON`, weapon-type,
 `SHIELD`, and `WeaponBack` coverage for diagnosis.
+
+Set `enableHiggsBodyReportingQualityRefresh=false` to isolate the guarded
+HIGGS hand/weapon reporting-quality refresh introduced by PR 6. This switch
+does not disable HIGGS or restore the unsafe unlocked mutation; it simply
+skips the patch-controlled refresh. Collision reporting for hands and weapons
+may be reduced while it is disabled. The first applied or suppressed refresh
+is logged once, so a posted `activeragdoll.log` identifies which path ran.
+
+The PR 5 constraint guard has no off switch because restoring a snapshot from
+the wrong ragdoll is not a safe diagnostic mode. The first accepted restore
+and the first rejected stale snapshot are instead logged once per process.
 
 Before replacing an observed node, the patch now verifies the parent slot,
 flattened-bone identity, animation-table ranges, current manager, and exact

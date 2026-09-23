@@ -29,6 +29,7 @@
 #include "RE/bs_intrusive_ref_ptr.h"
 #include "RE/misc.h"
 #include "havok_ref_ptr.h"
+#include "staged_intrusive_output.h"
 
 
 struct hkbWorldFromModelModeData
@@ -997,12 +998,12 @@ inline hkbGeneratorOutput::TrackHeader *GetTrackHeader(hkbGeneratorOutput &gener
 
 typedef bool(*_IAnimationGraphManagerHolder_GetAnimationGraphManagerImpl)(IAnimationGraphManagerHolder *_this, BSAnimationGraphManagerPtr &a_out);
 inline bool GetAnimationGraphManager(Actor *actor, BSAnimationGraphManagerPtr &out) {
-    // Some callers intentionally reuse the same local for a second query.
-    // Release the previous result before Skyrim overwrites it.
-    out.Reset();
     IAnimationGraphManagerHolder *animGraphManagerHolder = &actor->animGraphHolder;
     UInt64 *vtbl = *((UInt64 **)animGraphManagerHolder);
-    return ((_IAnimationGraphManagerHolder_GetAnimationGraphManagerImpl)(vtbl[0x02]))(animGraphManagerHolder, out);
+    auto getManager = (_IAnimationGraphManagerHolder_GetAnimationGraphManagerImpl)(vtbl[0x02]);
+    return QueryStagedIntrusiveOutput(out, [animGraphManagerHolder, getManager](BSAnimationGraphManagerPtr &next) {
+        return getManager(animGraphManagerHolder, next);
+    });
 }
 
 void MapHighResPoseLocalToLowResPoseWorld(hkbRagdollDriver *driver, const hkQsTransform &worldFromModel, const hkQsTransform *highResPoseLocal, hkQsTransform *lowResPoseWorldOut, bool applyRigidBodyT = true);

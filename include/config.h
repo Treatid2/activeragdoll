@@ -409,6 +409,7 @@ namespace Config {
         bool convertThirdPersonWeaponToFadeNodes = true;
         bool enableWeaponNodeRebinding = true;
         bool rebindUnobservedWeaponNodes = false;
+        bool enableHiggsBodyReportingQualityRefresh = true;
         float playerMeleeCollisionDisabledWeaponAlpha = 0.25f;
 
         bool convertNonRagdollBipedObjectsToDeadBip = true;

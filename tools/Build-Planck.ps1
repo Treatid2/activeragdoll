@@ -41,6 +41,7 @@ try {
     $logs = Join-Path $work 'logs'
     New-Item -ItemType Directory -Path $out, $logs | Out-Null
     $projects = @(
+        @('planck_tests', (Join-Path $sourceRoot 'tests\planck_tests.vcxproj'), 'Release'),
         @('common', (Join-Path $SdkSource 'common\common_vc14.vcxproj'), 'Release'),
         @('skse64_common', (Join-Path $SdkSource 'sksevr\skse64_common\skse64_common.vcxproj'), 'Release'),
         @('skse64', (Join-Path $SdkSource 'sksevr\skse64\skse64.vcxproj'), 'Release_Lib'),
@@ -59,6 +60,12 @@ try {
         $receipts += $receipt
         if (!$receipt.success) { throw "Build failed at $($project[0]): $($receipt.first_actionable_failure)" }
     }
+    $testExecutable = Join-Path $out 'planck_tests.exe'
+    if (!(Test-Path -LiteralPath $testExecutable)) { throw 'Missing output: planck_tests.exe' }
+    $testReceipt = & $runner -FilePath $testExecutable -WorkingDirectory $work `
+        -OperationName 'planck-tests' -TimeoutSeconds 60 -LogDirectory $logs -PassThru
+    $receipts += $testReceipt
+    if (!$testReceipt.success) { throw "Tests failed: $($testReceipt.first_actionable_failure)" }
     foreach ($file in @('activeragdoll.dll', 'activeragdoll.pdb')) {
         if (!(Test-Path -LiteralPath (Join-Path $out $file))) { throw "Missing output: $file" }
     }

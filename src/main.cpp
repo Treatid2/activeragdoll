@@ -54,6 +54,7 @@
 // SKSE globals
 static PluginHandle	g_pluginHandle = kPluginHandle_Invalid;
 static SKSEMessagingInterface *g_messaging = nullptr;
+static constexpr auto g_stabilityPatchVersion = "1.3.3";
 
 SKSEVRInterface *g_vrInterface = nullptr;
 SKSETrampolineInterface *g_trampoline = nullptr;
@@ -4255,6 +4256,14 @@ void UpdateGrabbedActorMovementState(Actor *actor, bool doGrabbedActorMovement)
 
 void SetHiggsBodyReportingQuality(bhkWorld *world, const NiPointer<bhkRigidBody> &body)
 {
+    static std::atomic_bool loggedDisabled = false;
+    static std::atomic_bool loggedRefresh = false;
+    if (!Config::options.enableHiggsBodyReportingQualityRefresh) {
+        if (!loggedDisabled.exchange(true)) {
+            _MESSAGE("HIGGS body reporting-quality refresh disabled by patch configuration");
+        }
+        return;
+    }
     if (!world || !world->world || !body || !body->hkBody) return;
 
     hkpRigidBody *hkBody = body->hkBody;
@@ -4268,6 +4277,9 @@ void SetHiggsBodyReportingQuality(bhkWorld *world, const NiPointer<bhkRigidBody>
 
     hkBody->setQualityType(reportingQuality);
     bhkWorld_UpdateCollisionFilterOnWorldObject(world, body);
+    if (!loggedRefresh.exchange(true)) {
+        _MESSAGE("HIGGS body reporting-quality refresh applied");
+    }
 }
 
 void UpdateHiggsInfo(bhkWorld *world)
@@ -5112,6 +5124,10 @@ void PreDriveToPoseHook(hkbRagdollDriver *driver, hkReal deltaTime, const hkbCon
                 }
 
                 if (canRestoreConstraints) {
+                    static std::atomic_bool loggedConstraintRestore = false;
+                    if (!loggedConstraintRestore.exchange(true)) {
+                        _MESSAGE("Guarded ease-constraint snapshot restore applied");
+                    }
                     hkpEaseConstraintsAction_restoreConstraints(ragdoll->easeConstraintsAction, 0.f);
                     if (Config::options.loosenRagdollConstraintPivots) {
                         for (hkpConstraintInstance *constraint : driver->ragdoll->getConstraintArray()) {
@@ -5124,6 +5140,12 @@ void PreDriveToPoseHook(hkbRagdollDriver *driver, hkReal deltaTime, const hkbCon
                                 }
                             }
                         }
+                    }
+                }
+                else {
+                    static std::atomic_bool loggedConstraintRejection = false;
+                    if (!loggedConstraintRejection.exchange(true)) {
+                        _WARNING("Discarded ease-constraint snapshot after ragdoll ownership changed");
                     }
                 }
                 ragdoll->easeConstraintsAction = nullptr;
@@ -8468,6 +8490,14 @@ extern "C" {
         else {
             _WARNING("[WARNING] Failed to read some config options");
         }
+
+        _MESSAGE("PLANCK VR Stability Patch v%s: graphManagerOutputStaging=true, "
+            "enableWeaponNodeRebinding=%s, rebindUnobservedWeaponNodes=%s, "
+            "enableHiggsBodyReportingQualityRefresh=%s (restart required after changes)",
+            g_stabilityPatchVersion,
+            Config::options.enableWeaponNodeRebinding ? "true" : "false",
+            Config::options.rebindUnobservedWeaponNodes ? "true" : "false",
+            Config::options.enableHiggsBodyReportingQualityRefresh ? "true" : "false");
 
         gLog.SetPrintLevel((IDebugLog::LogLevel)Config::options.logLevel);
         gLog.SetLogLevel((IDebugLog::LogLevel)Config::options.logLevel);
